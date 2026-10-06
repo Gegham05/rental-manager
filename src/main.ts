@@ -73,7 +73,9 @@ app.innerHTML = `
   <p>
     Сохраните копию всех бронирований на устройство.
   </p>
-
+  <p class="backup-status" id="backupStatus">
+    Последняя копия: —
+  </p>
   <button class="backup-button" id="exportBackup">
     Экспортировать данные
   </button>
@@ -792,6 +794,45 @@ document
 const exportBackupButton =
   document.querySelector<HTMLButtonElement>('#exportBackup')!
 
+const backupStatus =
+  document.querySelector<HTMLElement>('#backupStatus')!
+
+function renderBackupStatus() {
+  const lastBackupAt =
+    localStorage.getItem('lastBackupAt')
+
+  if (!lastBackupAt) {
+    backupStatus.textContent =
+      'Последняя копия: ещё не создавалась'
+    return
+  }
+
+  const backupDate = new Date(lastBackupAt)
+  const now = new Date()
+
+  backupStatus.classList.remove('backup-warning')
+
+  const diffMs = now.getTime() - backupDate.getTime()
+  const days = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+
+  if (days === 0) {
+    backupStatus.textContent = 'Последняя копия: сегодня'
+  } else if (days === 1) {
+    backupStatus.textContent = 'Последняя копия: вчера'
+  } else {
+  backupStatus.textContent =
+    `Последняя копия: ${days} дн. назад`
+
+  if (days >= 7) {
+    backupStatus.classList.add('backup-warning')
+  } else {
+    backupStatus.classList.remove('backup-warning')
+  }
+}
+}
+
+renderBackupStatus()
+
 exportBackupButton.addEventListener('click', async () => {
   const bookings = await getAllBookings()
 
@@ -823,6 +864,12 @@ exportBackupButton.addEventListener('click', async () => {
   link.remove()
 
   URL.revokeObjectURL(url)
+
+  localStorage.setItem(
+  'lastBackupAt',
+  new Date().toISOString(),
+)
+  renderBackupStatus()
 })
 
 const importBackupButton =
@@ -882,33 +929,27 @@ backupFileInput.addEventListener('change', async () => {
 let calendarOffset = 0
 async function renderCalendar() {
   const calendar =
-    document.querySelector<HTMLDivElement>('#calendar')!
+    document.querySelector<HTMLElement>('#calendar')!
 
   const bookings = await getAllBookings()
 
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  today.setDate(today.getDate() + calendarOffset)
+  const startDate = new Date()
+  startDate.setHours(0, 0, 0, 0)
+  startDate.setDate(startDate.getDate() + calendarOffset)
 
-  const days = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date(today)
-    date.setDate(today.getDate() + index)
-    return date
-  })
+  let html = ''
 
-  calendar.innerHTML = ''
+  for (let dayIndex = 0; dayIndex < 7; dayIndex++) {
+    const date = new Date(startDate)
+    date.setDate(startDate.getDate() + dayIndex)
 
-  for (const date of days) {
     const dayStart = new Date(date)
     dayStart.setHours(0, 0, 0, 0)
 
     const dayEnd = new Date(date)
     dayEnd.setHours(23, 59, 59, 999)
 
-    const dayElement = document.createElement('section')
-    dayElement.className = 'calendar-day'
-
-    const dateText = date.toLocaleDateString('ru-RU', {
+    const dateTitle = date.toLocaleDateString('ru-RU', {
       weekday: 'short',
       day: 'numeric',
       month: 'short',
@@ -917,49 +958,105 @@ async function renderCalendar() {
     let housesHtml = ''
 
     for (const houseId of [1, 2, 3] as const) {
-      const booking = bookings.find((booking) => {
-        if (booking.houseId !== houseId) {
-          return false
-        }
+      const houseBookings = bookings
+        .filter((booking) => {
+          if (booking.houseId !== houseId) {
+            return false
+          }
 
-        const start = new Date(booking.startAt)
-        const end = new Date(booking.endAt)
+          const start = new Date(booking.startAt)
+          const end = new Date(booking.endAt)
 
-        return start <= dayEnd && end > dayStart
-      })
+          return start <= dayEnd && end > dayStart
+        })
+        .sort(
+          (a, b) =>
+            new Date(a.startAt).getTime() -
+            new Date(b.startAt).getTime(),
+        )
 
-      if (booking) {
-        housesHtml += `
-          <div
-            class="calendar-house busy"
-            data-booking-id="${booking.id}"
-          >
-            <strong>Дом ${houseId}</strong>
-            <span>${booking.guestName}</span>
-          </div>
-        `
-      } else {
+      if (houseBookings.length === 0) {
         housesHtml += `
           <div class="calendar-house free">
             <strong>Дом ${houseId}</strong>
             <span>Свободен</span>
           </div>
         `
+
+        continue
       }
+
+      const bookingItems = houseBookings
+        .map((booking) => {
+          const start = new Date(booking.startAt)
+          const end = new Date(booking.endAt)
+
+          const startsToday =
+            start >= dayStart && start <= dayEnd
+
+          const endsToday =
+            end >= dayStart && end <= dayEnd
+
+          const startTime = start.toLocaleTimeString(
+            'ru-RU',
+            {
+              hour: '2-digit',
+              minute: '2-digit',
+            },
+          )
+
+          const endTime = end.toLocaleTimeString(
+            'ru-RU',
+            {
+              hour: '2-digit',
+              minute: '2-digit',
+            },
+          )
+
+          let status = 'Занят'
+
+          if (startsToday && endsToday) {
+            status = `${startTime} → ${endTime}`
+          } else if (startsToday) {
+            status = `Заезд ${startTime}`
+          } else if (endsToday) {
+            status = `Выезд ${endTime}`
+          }
+
+          return `
+            <div
+              class="calendar-booking"
+              data-booking-id="${booking.id}"
+            >
+              <strong>${booking.guestName}</strong>
+              <span>${status}</span>
+            </div>
+          `
+        })
+        .join('')
+
+      housesHtml += `
+        <div class="calendar-house busy">
+          <strong>Дом ${houseId}</strong>
+          ${bookingItems}
+        </div>
+      `
     }
 
-    dayElement.innerHTML = `
-      <div class="calendar-date">
-        ${dateText}
-      </div>
+    html += `
+      <section class="calendar-day">
+        <div class="calendar-date">
+          ${dateTitle}
+        </div>
 
-      <div class="calendar-houses">
-        ${housesHtml}
-      </div>
+        <div class="calendar-houses">
+          ${housesHtml}
+        </div>
+      </section>
     `
-
-    calendar.appendChild(dayElement)
   }
+
+  calendar.innerHTML = html
 }
 
 document
@@ -968,7 +1065,7 @@ document
     const target = event.target as HTMLElement
 
     const bookingCard =
-      target.closest<HTMLElement>('.calendar-house.busy')
+      target.closest<HTMLElement>('.calendar-booking')
 
     if (!bookingCard) {
       return

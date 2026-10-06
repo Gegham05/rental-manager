@@ -818,3 +818,13 @@ body {
   background: #f2f2f7;
   color: #1d1d1f;
 }
+
+.backup-status {
+  font-size: 13px;
+  color: #86868b;
+}
+
+.backup-status.backup-warning {
+  color: #d70015;
+  font-weight: 600;
+}
