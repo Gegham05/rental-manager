@@ -15,7 +15,7 @@ app.innerHTML = `
   <main class="app" id="todayPage">
     <header class="header">
       <div>
-        <p class="date">5 октября 2026</p>
+        <p class="date" id="todayDate"></p>
         <h1>Сегодня</h1>
       </div>
 
@@ -267,6 +267,21 @@ const searchPage =
 
 const searchNav =
   document.querySelector<HTMLButtonElement>('#searchNav')!
+
+const todayDate =
+  document.querySelector<HTMLElement>('#todayDate')!
+
+function renderTodayDate() {
+  const now = new Date()
+
+  todayDate.textContent = now.toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  })
+}
+
+renderTodayDate()
 
 function showTodayPage() {
   todayPage.classList.remove('hidden-page')
