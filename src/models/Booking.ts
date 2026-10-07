@@ -1,10 +1,16 @@
 export type RentalType = 'overnight' | 'day'
 
+export type BookingStatus =
+  | 'pending'
+  | 'confirmed'
+  | 'expired'
+
 export interface Booking {
   id: string
 
   houseId: 1 | 2 | 3
   rentalType: RentalType
+  status: BookingStatus
 
   startAt: string
   endAt: string
@@ -20,4 +26,5 @@ export interface Booking {
 
   createdAt: string
   updatedAt: string
+
 }

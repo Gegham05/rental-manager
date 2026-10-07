@@ -19,36 +19,74 @@ app.innerHTML = `
         <h1>Сегодня</h1>
       </div>
 
-      <button class="add-button" id="addBooking">
-        + Новая бронь
-      </button>
+      <div class="header-actions">
+        <button class="add-button" id="addBooking">
+          + Новая бронь
+        </button>
+        <button
+          type="button"
+          class="add-button quick-pending-button"
+          id="addQuickPendingBooking"
+        >
+          + Предварительная
+        </button>
+      </div>
     </header>
 
     <section class="houses" id="houses"></section>
     <section class="upcoming-section">
-  <div class="section-header">
-    <h2>Ближайшие брони</h2>
+  <div class="booking-tabs">
+    <button
+      type="button"
+      class="booking-tab active"
+      id="upcomingBookingsTab"
+    >
+      Ближайшие брони
+    </button>
+
+    <button
+      type="button"
+      class="booking-tab"
+      id="recentBookingsTab"
+    >
+      Последние брони
+    </button>
+
   </div>
 
-    <div class="upcoming-bookings" id="upcomingBookings"></div>
-  </section>
-    </main>
+  <div
+    class="upcoming-bookings"
+    id="upcomingBookings"
+  ></div>
+</section>
+      </main>
     <main class="app hidden-page" id="calendarPage">
-    <div class="calendar-header">
-      <div>
-        <p class="date">Занятость домов</p>
-        <h1>Календарь</h1>
-      </div>
-    </div>
+<div class="calendar-header">
+  <div>
+    <p class="date">Занятость домов</p>
+    <h1>Календарь</h1>
+  </div>
+</div>
 
-    <div class="calendar-controls">
-      <button id="calendarPrev">←</button>
-      <button id="calendarToday">Сегодня</button>
-      <button id="calendarNext">→</button>
-    </div>
+<div class="calendar-controls">
+  <button type="button" id="calendarPrev" aria-label="Предыдущий месяц">←</button>
+  <button type="button" id="calendarToday">Сегодня</button>
+  <strong id="calendarMonthLabel"></strong>
+  <button type="button" id="calendarNext" aria-label="Следующий месяц">→</button>
+</div>
 
-    <div id="calendar"></div>
+<div id="calendar"></div>
   </main>
+  <div class="modal hidden" id="selectedDayModal">
+<div class="modal-backdrop" id="selectedDayBackdrop"></div>
+<div class="modal-content day-details-content">
+  <div class="modal-header">
+    <h2 id="selectedDayTitle">Брони на дату</h2>
+    <button type="button" class="close-button" id="closeSelectedDay">×</button>
+  </div>
+  <div id="selectedDayBookings" class="selected-day-bookings"></div>
+</div>
+  </div>
   <main class="app hidden-page" id="searchPage">
   <div class="search-header">
     <p class="date">Бронирования</p>
@@ -59,13 +97,13 @@ app.innerHTML = `
     type="search"
     id="bookingSearch"
     class="search-input"
-    placeholder="Имя или телефон"
+    placeholder="Введите имя, номер телефона или дату"
     autocomplete="off"
   />
 
   <div id="searchResults" class="search-results">
     <div class="empty-bookings">
-      Введите имя или номер телефона
+      Введите имя, номер телефона или дату
     </div>
   </div>
   <section class="backup-section">
@@ -228,10 +266,68 @@ app.innerHTML = `
           ></textarea>
         </label>
 
-        <button type="submit" class="save-button" id="saveBookingButton">
-          Забронировать
-        </button>
+        <div class="booking-actions">
+  <button
+    type="submit"
+    class="pending-booking-button"
+    id="savePendingButton"
+  >
+    Предварительно
+  </button>
 
+  <button
+    type="submit"
+    class="submit-button"
+    id="saveBookingButton"
+  >
+    Забронировать
+  </button>
+</div>
+
+      </form>
+    </div>
+  </div>
+  <div class="modal hidden" id="quickPendingModal">
+    <div class="modal-backdrop" id="quickPendingBackdrop"></div>
+
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Предварительная бронь</h2>
+        <button
+          type="button"
+          class="close-button"
+          id="closeQuickPendingModal"
+        >×</button>
+      </div>
+
+      <form id="quickPendingForm">
+        <label>
+          Дом, заезд, выезд, цена
+          <input
+            type="text"
+            name="bookingLine"
+            placeholder="1 25.12 27.12 80000"
+            inputmode="text"
+            autocomplete="off"
+            required
+          >
+          <span class="quick-pending-hint">
+            Вводите через пробел. Год в датах можно не указывать.
+          </span>
+        </label>
+
+        <label>
+          Комментарий
+          <textarea
+            name="comment"
+            rows="3"
+            placeholder="Необязательно"
+          ></textarea>
+        </label>
+
+        <button type="submit" class="submit-button">
+          Сохранить предварительную бронь
+        </button>
       </form>
     </div>
   </div>
@@ -348,6 +444,9 @@ let editingBookingId: string | null = null
 const saveBookingButton =
   document.querySelector<HTMLButtonElement>('#saveBookingButton')!
 
+//const savePendingButton =
+// document.querySelector<HTMLButtonElement>('#savePendingButton')!
+
 const priceInput =
   form.elements.namedItem('price') as HTMLInputElement
 
@@ -377,6 +476,29 @@ function formatDateTimeLocal(date: Date): string {
   return `${year}-${month}-${day}T${hours}:${minutes}`
 }
 
+function parseQuickBookingDate(value: string): Date | null {
+  const match = value.trim().match(/^(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?$/)
+
+  if (!match) {
+    return null
+  }
+
+  const day = Number(match[1])
+  const month = Number(match[2])
+  const year = match[3] ? Number(match[3]) : new Date().getFullYear()
+  const date = new Date(year, month - 1, day)
+
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null
+  }
+
+  return date
+}
+
 function updateOvernightDates() {
   const rentalType =
     form.querySelector<HTMLInputElement>(
@@ -402,13 +524,18 @@ function updateOvernightDates() {
   endInput.value = formatDateTimeLocal(end)
 }
 
-function openModal() {
+function openModal(
+  selectedStartDate?: Date,
+  selectedHouseId?: number,
+) {
   editingBookingId = null
 
   form.reset()
   updateRemaining()
 
-  const start = new Date()
+  const start = selectedStartDate
+    ? new Date(selectedStartDate)
+    : new Date()
   start.setHours(14, 0, 0, 0)
 
   const end = new Date(start)
@@ -418,13 +545,109 @@ function openModal() {
   startInput.value = formatDateTimeLocal(start)
   endInput.value = formatDateTimeLocal(end)
 
+  if (selectedHouseId) {
+    const houseInput =
+      form.elements.namedItem('house') as HTMLSelectElement
+    houseInput.value = String(selectedHouseId)
+  }
+
   saveBookingButton.textContent = 'Забронировать'
 
   modal.classList.remove('hidden')
 }
 
-addButton.addEventListener('click', openModal)
+addButton.addEventListener('click', () => openModal())
 startInput.addEventListener('change', updateOvernightDates)
+
+const quickPendingModal =
+  document.querySelector<HTMLDivElement>('#quickPendingModal')!
+const quickPendingForm =
+  document.querySelector<HTMLFormElement>('#quickPendingForm')!
+const addQuickPendingButton =
+  document.querySelector<HTMLButtonElement>('#addQuickPendingBooking')!
+const closeQuickPendingButton =
+  document.querySelector<HTMLButtonElement>('#closeQuickPendingModal')!
+const quickPendingBackdrop =
+  document.querySelector<HTMLDivElement>('#quickPendingBackdrop')!
+
+function closeQuickPendingModal() {
+  quickPendingModal.classList.add('hidden')
+  quickPendingForm.reset()
+}
+
+addQuickPendingButton.addEventListener('click', () => {
+  quickPendingModal.classList.remove('hidden')
+})
+closeQuickPendingButton.addEventListener('click', closeQuickPendingModal)
+quickPendingBackdrop.addEventListener('click', closeQuickPendingModal)
+
+quickPendingForm.addEventListener('submit', async (event) => {
+  event.preventDefault()
+
+  const formData = new FormData(quickPendingForm)
+  const bookingParts = String(formData.get('bookingLine'))
+    .trim()
+    .split(/\s+/)
+
+  if (bookingParts.length !== 4) {
+    alert(
+      'Введите четыре значения через пробел: дом заезд выезд цена. Например: 1 25.12 27.12 80000.',
+    )
+    return
+  }
+
+  const [housePart, startPart, endPart, pricePart] = bookingParts
+  const houseId = Number(housePart)
+  const startDate = parseQuickBookingDate(startPart)
+  const endDate = parseQuickBookingDate(endPart)
+  const totalPrice = Number(pricePart)
+
+  if (houseId !== 1 && houseId !== 2 && houseId !== 3) {
+    alert('Номер дома должен быть 1, 2 или 3.')
+    return
+  }
+
+  if (!startDate || !endDate) {
+    alert('Введите даты в формате дд.мм или дд.мм.гггг.')
+    return
+  }
+
+  if (!Number.isFinite(totalPrice) || totalPrice < 0) {
+    alert('Введите корректную цену.')
+    return
+  }
+
+  startDate.setHours(14, 0, 0, 0)
+  endDate.setHours(11, 0, 0, 0)
+
+  if (endDate <= startDate) {
+    alert('Дата выезда должна быть позже даты заезда.')
+    return
+  }
+
+  const now = new Date().toISOString()
+  const booking: Booking = {
+    id: crypto.randomUUID(),
+    houseId,
+    rentalType: 'overnight',
+    status: 'pending',
+    startAt: formatDateTimeLocal(startDate),
+    endAt: formatDateTimeLocal(endDate),
+    guestName: 'Предварительная бронь',
+    guestPhone: '',
+    guestCount: 1,
+    totalPrice,
+    paidAmount: 0,
+    comment: String(formData.get('comment')),
+    createdAt: now,
+    updatedAt: now,
+  }
+
+  await createBooking(booking)
+  await refreshBookingViews()
+  closeQuickPendingModal()
+  alert('Предварительная бронь сохранена.')
+})
 
 form
   .querySelectorAll<HTMLInputElement>(
@@ -535,7 +758,13 @@ async function renderHouses() {
   }
 }
 
-async function renderUpcomingBookings() {
+let bookingListMode: 'upcoming' | 'recent' = 'upcoming'
+
+async function renderUpcomingBookings(
+  mode: 'upcoming' | 'recent' = bookingListMode,
+) {
+  bookingListMode = mode
+
   const container =
     document.querySelector<HTMLDivElement>('#upcomingBookings')!
 
@@ -544,22 +773,39 @@ async function renderUpcomingBookings() {
   const now = new Date()
 
   const upcomingBookings = bookings
-    .filter((booking) => {
-      return new Date(booking.endAt) > now
-    })
-    .sort((a, b) => {
+  .filter((booking) => {
+    if (mode === 'recent') {
+      return true
+    }
+
+    return new Date(booking.endAt) > now
+  })
+  .sort((a, b) => {
+    if (mode === 'recent') {
       return (
-        new Date(a.startAt).getTime() -
-        new Date(b.startAt).getTime()
+        new Date(b.createdAt).getTime() -
+        new Date(a.createdAt).getTime()
       )
-    })
+    }
+
+    return (
+      new Date(a.startAt).getTime() -
+      new Date(b.startAt).getTime()
+    )
+  })
 
   if (upcomingBookings.length === 0) {
+    const emptyText =
+      mode === 'recent'
+        ? 'Последних броней пока нет'
+        : 'Ближайших броней пока нет'
+
     container.innerHTML = `
       <div class="empty-bookings">
-        Ближайших броней пока нет
+        ${emptyText}
       </div>
     `
+
     return
   }
 
@@ -655,6 +901,26 @@ async function renderUpcomingBookings() {
     .join('')
 }
 
+const upcomingBookingsTab =
+  document.querySelector<HTMLButtonElement>('#upcomingBookingsTab')!
+
+const recentBookingsTab =
+  document.querySelector<HTMLButtonElement>('#recentBookingsTab')!
+
+upcomingBookingsTab.addEventListener('click', async () => {
+  upcomingBookingsTab.classList.add('active')
+  recentBookingsTab.classList.remove('active')
+
+  await renderUpcomingBookings('upcoming')
+})
+
+recentBookingsTab.addEventListener('click', async () => {
+  recentBookingsTab.classList.add('active')
+  upcomingBookingsTab.classList.remove('active')
+
+  await renderUpcomingBookings('recent')
+})
+
 async function renderSearchResults(query: string) {
   const container =
     document.querySelector<HTMLDivElement>('#searchResults')!
@@ -673,15 +939,34 @@ async function renderSearchResults(query: string) {
   const bookings = await getAllBookings()
 
   const results = bookings
-    .filter((booking) => {
-      const name = booking.guestName.toLowerCase()
-      const phone = booking.guestPhone.toLowerCase()
+  .filter((booking) => {
+  const name = booking.guestName.toLowerCase()
+  const phone = booking.guestPhone.toLowerCase()
 
-      return (
-        name.includes(normalizedQuery) ||
-        phone.includes(normalizedQuery)
-      )
-    })
+  const start = new Date(booking.startAt)
+
+  const day = String(start.getDate()).padStart(2, '0')
+  const month = String(start.getMonth() + 1).padStart(2, '0')
+
+  const bookingDate = `${day}.${month}`
+
+  const normalizedDateQuery = normalizedQuery
+    .replace('/', '.')
+    .split('.')
+    .map((part) => part.padStart(2, '0'))
+    .join('.')
+
+  const matchesDate =
+    normalizedQuery === String(start.getDate()) ||
+    normalizedQuery === day ||
+    bookingDate === normalizedDateQuery
+
+  return (
+    name.includes(normalizedQuery) ||
+    phone.includes(normalizedQuery) ||
+    matchesDate
+  )
+})
     .sort(
       (a, b) =>
         new Date(b.startAt).getTime() -
@@ -769,6 +1054,19 @@ const bookingSearch =
 bookingSearch.addEventListener('input', () => {
   renderSearchResults(bookingSearch.value)
 })
+
+async function refreshBookingViews() {
+  await Promise.all([
+    renderHouses(),
+    renderUpcomingBookings(),
+    renderCalendar(),
+    renderSearchResults(bookingSearch.value),
+  ])
+
+  if (!selectedDayModal.classList.contains('hidden')) {
+    await renderSelectedDayBookings()
+  }
+}
 
 document
   .querySelector('#searchResults')
@@ -914,11 +1212,7 @@ backupFileInput.addEventListener('change', async () => {
 
     await replaceAllBookings(backup.bookings)
 
-    await renderHouses()
-    await renderUpcomingBookings()
-    await renderCalendar()
-
-    renderSearchResults(bookingSearch.value)
+    await refreshBookingViews()
 
     alert('Резервная копия успешно восстановлена.')
   } catch {
@@ -926,182 +1220,295 @@ backupFileInput.addEventListener('change', async () => {
   }
 })
 
-let calendarOffset = 0
+let calendarMonth = new Date()
+calendarMonth.setDate(1)
+
+function dateKey(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function parseDateKey(value: string): Date {
+  const [year, month, day] = value.split('-').map(Number)
+  return new Date(year, month - 1, day)
+}
+
 async function renderCalendar() {
   const calendar =
     document.querySelector<HTMLElement>('#calendar')!
+  const monthLabel =
+    document.querySelector<HTMLElement>('#calendarMonthLabel')!
 
   const bookings = await getAllBookings()
+  const year = calendarMonth.getFullYear()
+  const month = calendarMonth.getMonth()
+  const firstOfMonth = new Date(year, month, 1)
+  const firstGridDate = new Date(firstOfMonth)
+  firstGridDate.setDate(
+    firstGridDate.getDate() - ((firstGridDate.getDay() + 6) % 7),
+  )
+  const lastOfMonth = new Date(year, month + 1, 0)
+  const lastGridDate = new Date(lastOfMonth)
+  lastGridDate.setDate(
+    lastGridDate.getDate() + ((7 - lastGridDate.getDay()) % 7),
+  )
 
-  const startDate = new Date()
-  startDate.setHours(0, 0, 0, 0)
-  startDate.setDate(startDate.getDate() + calendarOffset)
+  monthLabel.textContent = firstOfMonth.toLocaleDateString('ru-RU', {
+    month: 'long',
+    year: 'numeric',
+  })
 
-  let html = ''
+  const weekdays = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+    .map((weekday) => `<span class="month-weekday">${weekday}</span>`)
+    .join('')
 
-  for (let dayIndex = 0; dayIndex < 7; dayIndex++) {
-    const date = new Date(startDate)
-    date.setDate(startDate.getDate() + dayIndex)
-
+  let daysHtml = ''
+  for (
+    const date = new Date(firstGridDate);
+    date <= lastGridDate;
+    date.setDate(date.getDate() + 1)
+  ) {
     const dayStart = new Date(date)
     dayStart.setHours(0, 0, 0, 0)
+    const nextDay = new Date(dayStart)
+    nextDay.setDate(nextDay.getDate() + 1)
 
-    const dayEnd = new Date(date)
-    dayEnd.setHours(23, 59, 59, 999)
+    const dayBookings = bookings.filter(
+      (booking) =>
+        new Date(booking.startAt) < nextDay &&
+        new Date(booking.endAt) > dayStart,
+    )
 
-    const dateTitle = date.toLocaleDateString('ru-RU', {
-      weekday: 'short',
-      day: 'numeric',
-      month: 'short',
-    })
-
-    let housesHtml = ''
-
-    for (const houseId of [1, 2, 3] as const) {
-      const houseBookings = bookings
-        .filter((booking) => {
-          if (booking.houseId !== houseId) {
-            return false
-          }
-
-          const start = new Date(booking.startAt)
-          const end = new Date(booking.endAt)
-
-          return start <= dayEnd && end > dayStart
-        })
-        .sort(
-          (a, b) =>
-            new Date(a.startAt).getTime() -
-            new Date(b.startAt).getTime(),
+    const houseIndicators = ([1, 2, 3] as const)
+      .map((houseId) => {
+        const houseBookings = dayBookings.filter(
+          (booking) => booking.houseId === houseId,
         )
 
-      if (houseBookings.length === 0) {
-        housesHtml += `
-          <div class="calendar-house free">
-            <strong>Дом ${houseId}</strong>
-            <span>Свободен</span>
-          </div>
+        if (houseBookings.length === 0) {
+          return `<span class="month-house free">Д${houseId} свободен</span>`
+        }
+
+        const hasConfirmed = houseBookings.some(
+          (booking) => (booking.status ?? 'confirmed') === 'confirmed',
+        )
+        const statusClass = hasConfirmed ? 'busy' : 'pending'
+        const countLabel =
+          houseBookings.length === 1
+            ? '1 бронь'
+            : `${houseBookings.length} бр.`
+
+        return `
+          <span class="month-house ${statusClass}">
+            Д${houseId} ${countLabel}
+          </span>
         `
+      })
+      .join('')
 
-        continue
-      }
+    const isCurrentMonth = date.getMonth() === month
+    const isToday = dateKey(date) === dateKey(new Date())
+    const dateTitle = date.toLocaleDateString('ru-RU', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    })
 
-      const bookingItems = houseBookings
-        .map((booking) => {
-          const start = new Date(booking.startAt)
-          const end = new Date(booking.endAt)
-
-          const startsToday =
-            start >= dayStart && start <= dayEnd
-
-          const endsToday =
-            end >= dayStart && end <= dayEnd
-
-          const startTime = start.toLocaleTimeString(
-            'ru-RU',
-            {
-              hour: '2-digit',
-              minute: '2-digit',
-            },
-          )
-
-          const endTime = end.toLocaleTimeString(
-            'ru-RU',
-            {
-              hour: '2-digit',
-              minute: '2-digit',
-            },
-          )
-
-          let status = 'Занят'
-
-          if (startsToday && endsToday) {
-            status = `${startTime} → ${endTime}`
-          } else if (startsToday) {
-            status = `Заезд ${startTime}`
-          } else if (endsToday) {
-            status = `Выезд ${endTime}`
-          }
-
-          return `
-            <div
-              class="calendar-booking"
-              data-booking-id="${booking.id}"
-            >
-              <strong>${booking.guestName}</strong>
-              <span>${status}</span>
-            </div>
-          `
-        })
-        .join('')
-
-      housesHtml += `
-        <div class="calendar-house busy">
-          <strong>Дом ${houseId}</strong>
-          ${bookingItems}
-        </div>
-      `
-    }
-
-    html += `
-      <section class="calendar-day">
-        <div class="calendar-date">
-          ${dateTitle}
-        </div>
-
-        <div class="calendar-houses">
-          ${housesHtml}
-        </div>
-      </section>
+    daysHtml += `
+      <button
+        type="button"
+        class="month-day${isCurrentMonth ? '' : ' outside-month'}${isToday ? ' today' : ''}"
+        data-calendar-date="${dateKey(date)}"
+        aria-label="${dateTitle}, броней: ${dayBookings.length}"
+      >
+        <span class="month-day-number">${date.getDate()}</span>
+        <span class="month-day-houses">${houseIndicators}</span>
+      </button>
     `
   }
 
-  calendar.innerHTML = html
+  calendar.innerHTML = `
+    <div class="month-grid">
+      ${weekdays}
+      ${daysHtml}
+    </div>
+  `
+}
+
+let selectedCalendarDate: Date | null = null
+
+const selectedDayModal =
+  document.querySelector<HTMLDivElement>('#selectedDayModal')!
+const selectedDayTitle =
+  document.querySelector<HTMLHeadingElement>('#selectedDayTitle')!
+const selectedDayBookings =
+  document.querySelector<HTMLDivElement>('#selectedDayBookings')!
+
+function closeSelectedDay() {
+  selectedDayModal.classList.add('hidden')
+}
+
+document
+  .querySelector<HTMLButtonElement>('#closeSelectedDay')!
+  .addEventListener('click', closeSelectedDay)
+document
+  .querySelector<HTMLDivElement>('#selectedDayBackdrop')!
+  .addEventListener('click', closeSelectedDay)
+
+async function openSelectedDay(date: Date) {
+  selectedCalendarDate = new Date(date)
+  selectedCalendarDate.setHours(0, 0, 0, 0)
+  await renderSelectedDayBookings()
+  selectedDayModal.classList.remove('hidden')
+}
+
+async function renderSelectedDayBookings() {
+  if (!selectedCalendarDate) {
+    return
+  }
+
+  const bookings = await getAllBookings()
+  const dayStart = new Date(selectedCalendarDate)
+  dayStart.setHours(0, 0, 0, 0)
+  const nextDay = new Date(dayStart)
+  nextDay.setDate(nextDay.getDate() + 1)
+
+  selectedDayTitle.textContent = dayStart.toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  })
+
+  selectedDayBookings.innerHTML = ([1, 2, 3] as const)
+    .map((houseId) => {
+      const houseBookings = bookings
+        .filter(
+          (booking) =>
+            booking.houseId === houseId &&
+            new Date(booking.startAt) < nextDay &&
+            new Date(booking.endAt) > dayStart,
+        )
+        .sort((a, b) => {
+          const aPending = (a.status ?? 'confirmed') === 'pending'
+          const bPending = (b.status ?? 'confirmed') === 'pending'
+          if (aPending !== bPending) {
+            return aPending ? -1 : 1
+          }
+          if (aPending) {
+            return b.totalPrice - a.totalPrice
+          }
+          return new Date(a.startAt).getTime() - new Date(b.startAt).getTime()
+        })
+
+      const bookingCards =
+        houseBookings.length === 0
+          ? '<p class="day-house-free">Свободен</p>'
+          : houseBookings
+              .map((booking) => {
+                const status =
+                  (booking.status ?? 'confirmed') === 'pending'
+                    ? 'Предварительная'
+                    : 'Подтверждённая'
+                const start = new Date(booking.startAt)
+                const end = new Date(booking.endAt)
+                const remaining =
+                  booking.totalPrice - booking.paidAmount
+
+                return `
+                  <button
+                    type="button"
+                    class="day-booking-card ${(booking.status ?? 'confirmed') === 'pending' ? 'pending' : 'confirmed'}"
+                    data-booking-id="${booking.id}"
+                  >
+                    <strong>${booking.guestName}</strong>
+                    <span>${status} · ${booking.totalPrice.toLocaleString('ru-RU')} ֏</span>
+                    <span>${booking.rentalType === 'overnight' ? 'С ночёвкой' : 'Без ночёвки'}</span>
+                    <span>${start.toLocaleString('ru-RU')} — ${end.toLocaleString('ru-RU')}</span>
+                    <span>Гостей: ${booking.guestCount} · Оплачено: ${booking.paidAmount.toLocaleString('ru-RU')} ֏ · Осталось: ${remaining.toLocaleString('ru-RU')} ֏</span>
+                    ${booking.guestPhone ? `<span>Телефон: ${booking.guestPhone}</span>` : ''}
+                    ${booking.comment ? `<span>Комментарий: ${booking.comment}</span>` : ''}
+                  </button>
+                `
+              })
+              .join('')
+
+      return `
+        <section class="day-house-section">
+          <div class="day-house-heading">
+            <h3>Дом ${houseId}</h3>
+            <button
+              type="button"
+              class="day-add-booking"
+              data-add-house="${houseId}"
+            >
+              + Добавить бронь
+            </button>
+          </div>
+          <div class="day-house-cards">${bookingCards}</div>
+        </section>
+      `
+    })
+    .join('')
 }
 
 document
   .querySelector('#calendar')
   ?.addEventListener('click', (event) => {
     const target = event.target as HTMLElement
+    const dayButton =
+      target.closest<HTMLButtonElement>('[data-calendar-date]')
+    const dateKeyValue = dayButton?.dataset.calendarDate
 
-    const bookingCard =
-      target.closest<HTMLElement>('.calendar-booking')
-
-    if (!bookingCard) {
+    if (!dateKeyValue) {
       return
     }
 
-    const bookingId = bookingCard.dataset.bookingId
-
-    if (!bookingId) {
-      return
-    }
-
-    openBookingDetails(bookingId)
+    void openSelectedDay(parseDateKey(dateKeyValue))
   })
 
 const calendarPrev =
   document.querySelector<HTMLButtonElement>('#calendarPrev')!
-
 const calendarToday =
   document.querySelector<HTMLButtonElement>('#calendarToday')!
-
 const calendarNext =
   document.querySelector<HTMLButtonElement>('#calendarNext')!
 
 calendarPrev.addEventListener('click', () => {
-  calendarOffset -= 7
+  calendarMonth.setMonth(calendarMonth.getMonth() - 1)
   renderCalendar()
 })
 
 calendarToday.addEventListener('click', () => {
-  calendarOffset = 0
+  calendarMonth = new Date()
+  calendarMonth.setDate(1)
   renderCalendar()
 })
 
 calendarNext.addEventListener('click', () => {
-  calendarOffset += 7
+  calendarMonth.setMonth(calendarMonth.getMonth() + 1)
   renderCalendar()
+})
+
+selectedDayBookings.addEventListener('click', (event) => {
+  const target = event.target as HTMLElement
+  const addButton = target.closest<HTMLButtonElement>('[data-add-house]')
+
+  if (addButton && selectedCalendarDate) {
+    const houseId = Number(addButton.dataset.addHouse)
+    openModal(selectedCalendarDate, houseId)
+    return
+  }
+
+  const bookingCard =
+    target.closest<HTMLButtonElement>('[data-booking-id]')
+  const bookingId = bookingCard?.dataset.bookingId
+
+  if (bookingId) {
+    closeSelectedDay()
+    void openBookingDetails(bookingId)
+  }
 })
 
 renderHouses()
@@ -1256,8 +1663,7 @@ form
 
   closeBookingDetails()
 
-  await renderHouses()
-  await renderUpcomingBookings()
+  await refreshBookingViews()
 
   return
 }
@@ -1315,12 +1721,18 @@ form
   }
 
   booking.paidAmount += amount
+  if (
+    (booking.status ?? 'confirmed') === 'pending' &&
+    booking.paidAmount > 0
+  ) {
+  booking.status = 'confirmed'
+}
+
   booking.updatedAt = new Date().toISOString()
 
   await updateBooking(booking)
 
-  await renderHouses()
-  await renderUpcomingBookings()
+  await refreshBookingViews()
   await openBookingDetails(booking.id)
 })
 
@@ -1477,6 +1889,16 @@ detailsBackdrop.addEventListener(
 form.addEventListener('submit', async (event) => {
   event.preventDefault()
 
+  const submitEvent = event as SubmitEvent
+
+  const submitter =
+    submitEvent.submitter as HTMLButtonElement | null
+
+  const bookingStatus =
+    submitter?.id === 'savePendingButton'
+      ? 'pending'
+      : 'confirmed'
+
   const formData = new FormData(form)
 
   const now = new Date().toISOString()
@@ -1486,6 +1908,7 @@ form.addEventListener('submit', async (event) => {
 
     houseId: Number(formData.get('house')) as 1 | 2 | 3,
     rentalType: formData.get('rentalType') as 'overnight' | 'day',
+    status: bookingStatus,
 
     startAt: String(formData.get('start')),
     endAt: String(formData.get('end')),
@@ -1502,31 +1925,11 @@ form.addEventListener('submit', async (event) => {
     createdAt: now,
     updatedAt: now,
   }
-  
-  if (new Date(booking.endAt) <= new Date(booking.startAt)) {
-  alert('Время выезда должно быть позже времени заезда.')
-  return
-}
 
-const hasConflict = await hasBookingConflict(
-  booking.houseId,
-  booking.startAt,
-  booking.endAt,
-  editingBookingId ?? undefined,
-)
-
-if (hasConflict) {
-  alert(
-    `Дом ${booking.houseId} уже забронирован на выбранное время.`,
-  )
-
-  return
-}
-
+  let existingBooking: Booking | undefined
   if (editingBookingId) {
     const bookings = await getAllBookings()
-
-    const existingBooking = bookings.find(
+    existingBooking = bookings.find(
       (item) => item.id === editingBookingId,
     )
 
@@ -1535,6 +1938,37 @@ if (hasConflict) {
       return
     }
 
+    if (
+      (existingBooking.status ?? 'confirmed') === 'pending' &&
+      booking.paidAmount === 0
+    ) {
+      booking.status = 'pending'
+    }
+  }
+  
+  if (new Date(booking.endAt) <= new Date(booking.startAt)) {
+  alert('Время выезда должно быть позже времени заезда.')
+  return
+}
+
+if (booking.status === 'confirmed') {
+  const hasConflict = await hasBookingConflict(
+    booking.houseId,
+    booking.startAt,
+    booking.endAt,
+    booking.status,
+    editingBookingId ?? undefined,
+  )
+
+  if (hasConflict) {
+    alert(
+      `Дом ${booking.houseId} уже забронирован на выбранное время.`,
+    )
+    return
+  }
+}
+
+  if (existingBooking) {
     booking.id = existingBooking.id
     booking.createdAt = existingBooking.createdAt
     booking.updatedAt = new Date().toISOString()
@@ -1545,8 +1979,7 @@ if (hasConflict) {
   } else {
     await createBooking(booking)
   }
-    await renderHouses()
-    await renderUpcomingBookings()
+    await refreshBookingViews()
 
     console.log('Бронь сохранена:', booking)
 
