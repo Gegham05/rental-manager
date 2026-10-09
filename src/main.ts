@@ -41,6 +41,20 @@ function escapeHtml(value: string): string {
   })
 }
 
+function renderContactPhoneButton(phone: string): string {
+  const escapedPhone = escapeHtml(phone)
+  return `
+    <button
+      type="button"
+      class="contact-phone-button"
+      data-contact-phone="${escapedPhone}"
+      aria-label="Выбрать способ связи: ${escapedPhone}"
+    >
+      ☎ ${escapedPhone}
+    </button>
+  `
+}
+
 const app = document.querySelector<HTMLDivElement>('#app')!
 
 app.innerHTML = `
@@ -458,10 +472,114 @@ app.innerHTML = `
     <div id="bookingDetails"></div>
   </div>
 </div>
+  <div class="modal hidden" id="contactOptionsModal">
+    <div class="modal-backdrop" id="contactOptionsBackdrop"></div>
+    <div class="modal-content contact-options-content">
+      <div class="modal-header">
+        <h2>Связаться</h2>
+        <button
+          type="button"
+          class="close-button"
+          id="closeContactOptions"
+        >×</button>
+      </div>
+      <p class="contact-options-phone" id="contactOptionsPhone"></p>
+      <div class="contact-options-list">
+        <a id="contactWhatsApp" class="contact-option" target="_blank" rel="noopener noreferrer">
+          Написать в WhatsApp
+        </a>
+        <a id="contactTelegram" class="contact-option" target="_blank" rel="noopener noreferrer">
+          Написать в Telegram
+        </a>
+        <a id="contactCall" class="contact-option">
+          Позвонить
+        </a>
+      </div>
+    </div>
+  </div>
 `
 
-const todayPage =
-  document.querySelector<HTMLElement>('#todayPage')!
+  const contactOptionsModal =
+    document.querySelector<HTMLDivElement>('#contactOptionsModal')!
+  const contactOptionsPhone =
+    document.querySelector<HTMLElement>('#contactOptionsPhone')!
+  const contactWhatsApp =
+    document.querySelector<HTMLAnchorElement>('#contactWhatsApp')!
+  const contactTelegram =
+    document.querySelector<HTMLAnchorElement>('#contactTelegram')!
+  const contactCall =
+    document.querySelector<HTMLAnchorElement>('#contactCall')!
+
+  function openContactOptions(phone: string) {
+    const digits = phone.replace(/\D/g, '')
+    if (!digits) {
+      alert('В номере телефона нет цифр.')
+      return
+    }
+
+    const hasInternationalPrefix = phone.trim().startsWith('+')
+    const hasInternationalDialPrefix = digits.startsWith('00')
+    const hasArmenianLocalPrefix = digits.startsWith('0')
+    let internationalDigits = digits
+
+    if (hasInternationalDialPrefix) {
+      internationalDigits = digits.slice(2)
+    } else if (hasArmenianLocalPrefix && !hasInternationalPrefix) {
+      internationalDigits = `374${digits.slice(1)}`
+    }
+
+    const callNumber =
+      hasInternationalPrefix ||
+      hasInternationalDialPrefix ||
+      hasArmenianLocalPrefix
+        ? `+${internationalDigits}`
+        : digits
+
+    contactOptionsPhone.textContent = phone
+    contactWhatsApp.href = `https://wa.me/${internationalDigits}`
+    contactTelegram.href = `https://t.me/+${internationalDigits}`
+    contactCall.href = `tel:${callNumber}`
+    contactOptionsModal.classList.remove('hidden')
+  }
+
+  function closeContactOptions() {
+    contactOptionsModal.classList.add('hidden')
+  }
+
+  document
+    .querySelector<HTMLButtonElement>('#closeContactOptions')!
+    .addEventListener('click', closeContactOptions)
+  document
+    .querySelector<HTMLDivElement>('#contactOptionsBackdrop')!
+    .addEventListener('click', closeContactOptions)
+
+  for (const link of [contactWhatsApp, contactTelegram, contactCall]) {
+    link.addEventListener('click', closeContactOptions)
+  }
+
+  app.addEventListener(
+    'click',
+    (event) => {
+      const target = event.target
+      if (!(target instanceof Element)) {
+        return
+      }
+
+      const phoneButton =
+        target.closest<HTMLButtonElement>('[data-contact-phone]')
+      if (!phoneButton) {
+        return
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+      openContactOptions(phoneButton.dataset.contactPhone ?? '')
+    },
+    true,
+  )
+
+  const todayPage =
+    document.querySelector<HTMLElement>('#todayPage')!
 
 const calendarPage =
   document.querySelector<HTMLElement>('#calendarPage')!
@@ -1317,7 +1435,7 @@ async function renderUpcomingBookings(
 
             ${
               booking.guestPhone
-                ? `<span>☎ ${booking.guestPhone}</span>`
+                ? renderContactPhoneButton(booking.guestPhone)
                 : ''
             }
           </div>
@@ -1467,11 +1585,7 @@ async function renderSearchResults(query: string) {
 
           ${
             booking.guestPhone
-              ? `
-                <div class="booking-meta">
-                  ☎ ${booking.guestPhone}
-                </div>
-              `
+              ? `<div class="booking-meta">${renderContactPhoneButton(booking.guestPhone)}</div>`
               : ''
           }
 
@@ -1893,19 +2007,20 @@ async function renderSelectedDayBookings() {
                   booking.totalPrice - booking.paidAmount
 
                 return `
-                  <button
-                    type="button"
+                  <article
                     class="day-booking-card ${(booking.status ?? 'confirmed') === 'pending' ? 'pending' : 'confirmed'}"
                     data-booking-id="${booking.id}"
+                    role="button"
+                    tabindex="0"
                   >
                     <strong>${booking.guestName}</strong>
                     <span>${status} · ${booking.totalPrice.toLocaleString('ru-RU')} ֏</span>
                     <span>${booking.rentalType === 'overnight' ? 'С ночёвкой' : 'Без ночёвки'}</span>
                     <span>${start.toLocaleString('ru-RU')} — ${end.toLocaleString('ru-RU')}</span>
                     <span>Гостей: ${booking.guestCount} · Оплачено: ${booking.paidAmount.toLocaleString('ru-RU')} ֏ · Осталось: ${remaining.toLocaleString('ru-RU')} ֏</span>
-                    ${booking.guestPhone ? `<span>Телефон: ${booking.guestPhone}</span>` : ''}
+                    ${booking.guestPhone ? renderContactPhoneButton(booking.guestPhone) : ''}
                     ${booking.comment ? `<span>Комментарий: ${booking.comment}</span>` : ''}
-                  </button>
+                  </article>
                 `
               })
               .join('')
@@ -1978,13 +2093,36 @@ selectedDayBookings.addEventListener('click', (event) => {
   }
 
   const bookingCard =
-    target.closest<HTMLButtonElement>('[data-booking-id]')
+    target.closest<HTMLElement>('[data-booking-id]')
   const bookingId = bookingCard?.dataset.bookingId
 
   if (bookingId) {
     closeSelectedDay()
     void openBookingDetails(bookingId)
   }
+})
+
+selectedDayBookings.addEventListener('keydown', (event) => {
+  if (
+    !(event instanceof KeyboardEvent) ||
+    !['Enter', ' '].includes(event.key)
+  ) {
+    return
+  }
+
+  const target = event.target
+  if (!(target instanceof Element) || target.closest('[data-contact-phone]')) {
+    return
+  }
+
+  const bookingCard = target.closest<HTMLElement>('[data-booking-id]')
+  if (!bookingCard?.dataset.bookingId) {
+    return
+  }
+
+  event.preventDefault()
+  closeSelectedDay()
+  void openBookingDetails(bookingCard.dataset.bookingId)
 })
 
 const houseSetupModal =
@@ -2431,9 +2569,7 @@ detailsBackdrop.addEventListener(
 
         ${
           booking.guestPhone
-            ? `<a href="tel:${booking.guestPhone}">
-                 ${booking.guestPhone}
-               </a>`
+            ? renderContactPhoneButton(booking.guestPhone)
             : ''
         }
       </div>

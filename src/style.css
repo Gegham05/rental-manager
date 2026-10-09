@@ -513,9 +513,59 @@ textarea {
   font-size: 24px;
 }
 
-.details-client a {
+.contact-phone-button {
+  justify-self: start;
+  border: 0;
+  padding: 0;
+  background: transparent;
   color: #007aff;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.contact-phone-button:focus-visible,
+.contact-option:focus-visible {
+  outline: 2px solid #007aff;
+  outline-offset: 3px;
+}
+
+.contact-options-content {
+  max-width: 400px;
+}
+
+.contact-options-phone {
+  margin: -8px 0 18px;
+  color: #6e6e73;
+  text-align: center;
+}
+
+.contact-options-list {
+  display: grid;
+  gap: 10px;
+}
+
+.contact-option {
+  display: block;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: #f2f2f7;
+  color: #1d1d1f;
+  font-weight: 600;
+  text-align: center;
   text-decoration: none;
+  cursor: pointer;
+}
+
+.contact-option:first-child {
+  background: #e8f5ec;
+  color: #1c7c3a;
+}
+
+.contact-option:nth-child(2) {
+  background: #e8f2ff;
+  color: #0066cc;
 }
 
 .details-row {
@@ -835,6 +885,10 @@ body {
 }
 
 .day-booking-card span {
+  font-size: 13px;
+}
+
+.day-booking-card .contact-phone-button {
   font-size: 13px;
 }
 
