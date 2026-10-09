@@ -839,6 +839,44 @@ body {
   border: 2px solid #1d1d1f;
 }
 
+.month-day.selected-calendar-day {
+  outline: 2px solid #007aff;
+  outline-offset: 1px;
+}
+
+.calendar-weekday-label {
+  color: #6e6e73;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.week-grid {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.month-day.week-day {
+  min-height: 190px;
+}
+
+.day-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.month-day.single-day {
+  min-height: 300px;
+  padding: 20px;
+}
+
+.month-day.single-day .month-day-number {
+  font-size: 24px;
+}
+
+.month-day.single-day .month-house {
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
 .month-day-number {
   font-size: 15px;
   font-weight: 700;
@@ -1003,6 +1041,19 @@ body {
 
   .month-weekday {
     font-size: 11px;
+  }
+
+  .week-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .month-day.week-day {
+    min-height: 112px;
+  }
+
+  .month-day.single-day {
+    min-height: 240px;
+    padding: 16px;
   }
 }
 

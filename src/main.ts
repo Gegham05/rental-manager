@@ -167,10 +167,10 @@ app.innerHTML = `
 </div>
 
 <div class="calendar-controls">
-  <button type="button" id="calendarPrev" aria-label="Предыдущий месяц">←</button>
-  <button type="button" id="calendarToday">Сегодня</button>
+  <button type="button" id="calendarPrev" aria-label="Предыдущий период">←</button>
+  <button type="button" id="calendarViewToggle" aria-label="Изменить вид календаря">Месяц</button>
   <strong id="calendarMonthLabel"></strong>
-  <button type="button" id="calendarNext" aria-label="Следующий месяц">→</button>
+  <button type="button" id="calendarNext" aria-label="Следующий период">→</button>
 </div>
 
 <div id="calendar"></div>
@@ -2075,8 +2075,11 @@ backupFileInput.addEventListener('change', async () => {
   }
 })
 
-let calendarMonth = new Date()
-calendarMonth.setDate(1)
+type CalendarView = 'month' | 'week' | 'day'
+
+let calendarView: CalendarView = 'month'
+let calendarDate = new Date()
+calendarDate.setHours(0, 0, 0, 0)
 
 function dateKey(date: Date): string {
   const year = date.getFullYear()
@@ -2113,10 +2116,26 @@ async function renderCalendar() {
     document.querySelector<HTMLElement>('#calendar')!
   const monthLabel =
     document.querySelector<HTMLElement>('#calendarMonthLabel')!
+  const viewToggle =
+    document.querySelector<HTMLButtonElement>('#calendarViewToggle')!
 
   const bookings = await getAllBookings()
-  const year = calendarMonth.getFullYear()
-  const month = calendarMonth.getMonth()
+  const year = calendarDate.getFullYear()
+  const month = calendarDate.getMonth()
+  const viewNames: Record<CalendarView, string> = {
+    month: 'Месяц',
+    week: 'Неделя',
+    day: 'День',
+  }
+  const viewOrder: CalendarView[] = ['month', 'week', 'day']
+  const currentViewIndex = viewOrder.indexOf(calendarView)
+  const nextView = viewOrder[(currentViewIndex + 1) % viewOrder.length]
+  viewToggle.textContent = viewNames[calendarView]
+  viewToggle.setAttribute(
+    'aria-label',
+    `Текущий вид: ${viewNames[calendarView]}. Переключить на ${viewNames[nextView]}`,
+  )
+
   const firstOfMonth = new Date(year, month, 1)
   const firstGridDate = new Date(firstOfMonth)
   firstGridDate.setDate(
@@ -2128,19 +2147,50 @@ async function renderCalendar() {
     lastGridDate.getDate() + ((7 - lastGridDate.getDay()) % 7),
   )
 
-  monthLabel.textContent = firstOfMonth.toLocaleDateString('ru-RU', {
-    month: 'long',
-    year: 'numeric',
-  })
+  const weekStart = new Date(calendarDate)
+  weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7))
+  const weekEnd = new Date(weekStart)
+  weekEnd.setDate(weekEnd.getDate() + 6)
 
-  const weekdays = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
-    .map((weekday) => `<span class="month-weekday">${weekday}</span>`)
-    .join('')
+  let firstVisibleDate: Date
+  let lastVisibleDate: Date
+  if (calendarView === 'month') {
+    firstVisibleDate = firstGridDate
+    lastVisibleDate = lastGridDate
+    monthLabel.textContent = firstOfMonth.toLocaleDateString('ru-RU', {
+      month: 'long',
+      year: 'numeric',
+    })
+  } else if (calendarView === 'week') {
+    firstVisibleDate = weekStart
+    lastVisibleDate = weekEnd
+    monthLabel.textContent =
+      `${weekStart.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })} — ` +
+      weekEnd.toLocaleDateString('ru-RU', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      })
+  } else {
+    firstVisibleDate = new Date(calendarDate)
+    lastVisibleDate = new Date(calendarDate)
+    monthLabel.textContent = calendarDate.toLocaleDateString('ru-RU', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    })
+  }
+
+  const weekdays = calendarView === 'month'
+    ? ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+        .map((weekday) => `<span class="month-weekday">${weekday}</span>`)
+        .join('')
+    : ''
 
   let daysHtml = ''
   for (
-    const date = new Date(firstGridDate);
-    date <= lastGridDate;
+    const date = new Date(firstVisibleDate);
+    date <= lastVisibleDate;
     date.setDate(date.getDate() + 1)
   ) {
     const dayStart = new Date(date)
@@ -2186,22 +2236,27 @@ async function renderCalendar() {
       month: 'long',
       year: 'numeric',
     })
+    const weekdayLabel = date.toLocaleDateString('ru-RU', {
+      weekday: 'short',
+    })
+    const isSelectedDate = dateKey(date) === dateKey(calendarDate)
 
     daysHtml += `
       <button
         type="button"
-        class="month-day${isCurrentMonth ? '' : ' outside-month'}${isToday ? ' today' : ''}"
+        class="month-day${calendarView === 'week' ? ' week-day' : ''}${calendarView === 'day' ? ' single-day' : ''}${calendarView === 'month' && !isCurrentMonth ? ' outside-month' : ''}${isToday ? ' today' : ''}${isSelectedDate ? ' selected-calendar-day' : ''}"
         data-calendar-date="${dateKey(date)}"
         aria-label="${dateTitle}, броней: ${dayBookings.length}"
       >
-        <span class="month-day-number">${date.getDate()}</span>
+        ${calendarView === 'month' ? '' : `<span class="calendar-weekday-label">${weekdayLabel}</span>`}
+        <span class="month-day-number">${calendarView === 'month' ? date.getDate() : dateTitle}</span>
         <span class="month-day-houses">${houseIndicators}</span>
       </button>
     `
   }
 
   calendar.innerHTML = `
-    <div class="month-grid">
+    <div class="month-grid${calendarView === 'week' ? ' week-grid' : ''}${calendarView === 'day' ? ' day-grid' : ''}">
       ${weekdays}
       ${daysHtml}
     </div>
@@ -2337,29 +2392,62 @@ document
       return
     }
 
-    void openSelectedDay(parseDateKey(dateKeyValue))
+    calendarDate = parseDateKey(dateKeyValue)
+    void renderCalendar()
+    void openSelectedDay(calendarDate)
   })
 
 const calendarPrev =
   document.querySelector<HTMLButtonElement>('#calendarPrev')!
-const calendarToday =
-  document.querySelector<HTMLButtonElement>('#calendarToday')!
+const calendarViewToggle =
+  document.querySelector<HTMLButtonElement>('#calendarViewToggle')!
 const calendarNext =
   document.querySelector<HTMLButtonElement>('#calendarNext')!
 
 calendarPrev.addEventListener('click', () => {
-  calendarMonth.setMonth(calendarMonth.getMonth() - 1)
+  if (calendarView === 'month') {
+    const dayOfMonth = calendarDate.getDate()
+    calendarDate.setDate(1)
+    calendarDate.setMonth(calendarDate.getMonth() - 1)
+    calendarDate.setDate(
+      Math.min(dayOfMonth, new Date(
+        calendarDate.getFullYear(),
+        calendarDate.getMonth() + 1,
+        0,
+      ).getDate()),
+    )
+  } else {
+    calendarDate.setDate(
+      calendarDate.getDate() - (calendarView === 'week' ? 7 : 1),
+    )
+  }
   renderCalendar()
 })
 
-calendarToday.addEventListener('click', () => {
-  calendarMonth = new Date()
-  calendarMonth.setDate(1)
+calendarViewToggle.addEventListener('click', () => {
+  const viewOrder: CalendarView[] = ['month', 'week', 'day']
+  calendarView =
+    viewOrder[(viewOrder.indexOf(calendarView) + 1) % viewOrder.length]
   renderCalendar()
 })
 
 calendarNext.addEventListener('click', () => {
-  calendarMonth.setMonth(calendarMonth.getMonth() + 1)
+  if (calendarView === 'month') {
+    const dayOfMonth = calendarDate.getDate()
+    calendarDate.setDate(1)
+    calendarDate.setMonth(calendarDate.getMonth() + 1)
+    calendarDate.setDate(
+      Math.min(dayOfMonth, new Date(
+        calendarDate.getFullYear(),
+        calendarDate.getMonth() + 1,
+        0,
+      ).getDate()),
+    )
+  } else {
+    calendarDate.setDate(
+      calendarDate.getDate() + (calendarView === 'week' ? 7 : 1),
+    )
+  }
   renderCalendar()
 })
 
