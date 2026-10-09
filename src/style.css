@@ -416,6 +416,31 @@ textarea {
   margin-bottom: 14px;
 }
 
+.booking-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.receipt-icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: #f2f2f7;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.receipt-icon-button:hover,
+.receipt-icon-button:focus-visible {
+  background: #e5e5ea;
+  outline: 2px solid #8e8e93;
+}
+
 .booking-house {
   font-weight: 700;
 }
@@ -546,6 +571,60 @@ textarea {
   gap: 10px;
 }
 
+.receipt-modal-content {
+  max-width: 520px;
+}
+
+.receipt-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.receipt-list-empty {
+  margin: 0;
+  padding: 18px;
+  border-radius: 12px;
+  background: #f5f5f7;
+  color: #86868b;
+  text-align: center;
+}
+
+.receipt-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #eeeeee;
+  border-radius: 12px;
+}
+
+.receipt-file-link {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: #0066cc;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.receipt-file-link span {
+  color: #86868b;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.receipt-delete-button {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 9px;
+  padding: 8px 10px;
+  background: #fff0f0;
+  color: #b42318;
+  cursor: pointer;
+}
+
 .contact-option {
   display: block;
   padding: 14px 16px;
@@ -640,6 +719,11 @@ textarea {
 .details-payment-button {
   background: #e8f2ff;
   color: #0066cc;
+}
+
+.details-receipts-button {
+  background: #f2f2f7;
+  color: #1d1d1f;
 }
 
 .details-delete-button {

@@ -1,9 +1,15 @@
 import './style.css'
 import { hasBookingConflict } from './services/bookingService'
+import { convertReceiptImageToPdf } from './services/receiptPdfService'
 import type { Booking } from './models/Booking'
+import type { Receipt } from './models/Receipt'
 import {
+  addReceipt,
   createBooking,
+  deleteReceipt,
   getAllBookings,
+  getAllReceipts,
+  getReceiptsForBooking,
   updateBooking,
   deleteBooking,
   replaceAllBookings,
@@ -53,6 +59,52 @@ function renderContactPhoneButton(phone: string): string {
       ☎ ${escapedPhone}
     </button>
   `
+}
+
+function renderReceiptButton(booking: Booking): string {
+  if ((booking.status ?? 'confirmed') !== 'confirmed') {
+    return ''
+  }
+
+  return `
+    <button
+      type="button"
+      class="receipt-icon-button"
+      data-receipts-booking-id="${booking.id}"
+      aria-label="Квитанции по брони"
+      title="Фото квитанций"
+    >
+      🧾
+    </button>
+  `
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize))
+  }
+  return `data:${blob.type};base64,${btoa(binary)}`
+}
+
+function pdfDataUrlToBlob(dataUrl: string): Blob {
+  const match = dataUrl.match(/^data:application\/pdf;base64,([A-Za-z0-9+/=]+)$/)
+  if (!match) {
+    throw new Error('В резервной копии найдена некорректная квитанция.')
+  }
+
+  const binary = atob(match[1])
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+
+  if (new TextDecoder().decode(bytes.subarray(0, 5)) !== '%PDF-') {
+    throw new Error('Файл квитанции в резервной копии повреждён.')
+  }
+  return new Blob([bytes], { type: 'application/pdf' })
 }
 
 const app = document.querySelector<HTMLDivElement>('#app')!
@@ -497,6 +549,26 @@ app.innerHTML = `
       </div>
     </div>
   </div>
+  <div class="modal hidden" id="receiptModal">
+    <div class="modal-backdrop" id="receiptBackdrop"></div>
+    <div class="modal-content receipt-modal-content">
+      <div class="modal-header">
+        <h2 id="receiptModalTitle">Квитанции</h2>
+        <button type="button" class="close-button" id="closeReceiptModal">×</button>
+      </div>
+      <button type="button" class="backup-button" id="addReceiptButton">
+        Добавить фото квитанции
+      </button>
+      <input
+        type="file"
+        id="receiptFileInput"
+        accept="image/*"
+        multiple
+        hidden
+      >
+      <div id="receiptList" class="receipt-list"></div>
+    </div>
+  </div>
 `
 
   const contactOptionsModal =
@@ -557,11 +629,173 @@ app.innerHTML = `
     link.addEventListener('click', closeContactOptions)
   }
 
+  const receiptModal =
+    document.querySelector<HTMLDivElement>('#receiptModal')!
+  const receiptModalTitle =
+    document.querySelector<HTMLHeadingElement>('#receiptModalTitle')!
+  const receiptList =
+    document.querySelector<HTMLDivElement>('#receiptList')!
+  const receiptFileInput =
+    document.querySelector<HTMLInputElement>('#receiptFileInput')!
+  let activeReceiptBookingId: string | null = null
+  let receiptObjectUrls: string[] = []
+
+  function clearReceiptObjectUrls() {
+    for (const url of receiptObjectUrls) {
+      URL.revokeObjectURL(url)
+    }
+    receiptObjectUrls = []
+  }
+
+  async function renderReceiptList() {
+    if (!activeReceiptBookingId) {
+      return
+    }
+
+    clearReceiptObjectUrls()
+    const receipts = await getReceiptsForBooking(activeReceiptBookingId)
+    if (receipts.length === 0) {
+      receiptList.innerHTML =
+        '<p class="receipt-list-empty">Квитанций пока нет.</p>'
+      return
+    }
+
+    receiptList.innerHTML = receipts
+      .map((receipt) => {
+        const url = URL.createObjectURL(receipt.pdf)
+        receiptObjectUrls.push(url)
+        return `
+          <div class="receipt-item">
+            <a
+              class="receipt-file-link"
+              href="${url}"
+              target="_blank"
+              rel="noopener noreferrer"
+              download="${escapeHtml(receipt.fileName)}"
+            >
+              ${escapeHtml(receipt.fileName)}
+              <span>${new Date(receipt.createdAt).toLocaleDateString('ru-RU')}</span>
+            </a>
+            <button
+              type="button"
+              class="receipt-delete-button"
+              data-delete-receipt="${receipt.id}"
+              aria-label="Удалить квитанцию"
+            >
+              Удалить
+            </button>
+          </div>
+        `
+      })
+      .join('')
+  }
+
+  async function openReceiptManager(bookingId: string) {
+    const bookings = await getAllBookings()
+    const booking = bookings.find((item) => item.id === bookingId)
+    if (!booking) {
+      alert('Бронь не найдена.')
+      return
+    }
+    if ((booking.status ?? 'confirmed') !== 'confirmed') {
+      alert('Квитанции можно прикреплять только к подтверждённой брони.')
+      return
+    }
+
+    activeReceiptBookingId = bookingId
+    receiptModalTitle.textContent =
+      `Квитанции · ${getHouseName(booking.houseId)}`
+    await renderReceiptList()
+    receiptModal.classList.remove('hidden')
+  }
+
+  function closeReceiptManager() {
+    receiptModal.classList.add('hidden')
+    activeReceiptBookingId = null
+    receiptFileInput.value = ''
+    clearReceiptObjectUrls()
+  }
+
+  document
+    .querySelector<HTMLButtonElement>('#closeReceiptModal')!
+    .addEventListener('click', closeReceiptManager)
+  document
+    .querySelector<HTMLDivElement>('#receiptBackdrop')!
+    .addEventListener('click', closeReceiptManager)
+
+  document
+    .querySelector<HTMLButtonElement>('#addReceiptButton')!
+    .addEventListener('click', () => receiptFileInput.click())
+
+  receiptFileInput.addEventListener('change', async () => {
+    const bookingId = activeReceiptBookingId
+    const files = Array.from(receiptFileInput.files ?? [])
+    receiptFileInput.value = ''
+    if (!bookingId || files.length === 0) {
+      return
+    }
+
+    const errors: string[] = []
+    for (const file of files) {
+      try {
+        const pdf = await convertReceiptImageToPdf(file)
+        const baseName =
+          file.name.replace(/\.[^.]+$/, '').trim() || 'receipt'
+        const receipt: Receipt = {
+          id: crypto.randomUUID(),
+          bookingId,
+          fileName: `${baseName}.pdf`,
+          pdf,
+          createdAt: new Date().toISOString(),
+        }
+        await addReceipt(receipt)
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Неизвестная ошибка'
+        errors.push(`${file.name}: ${message}`)
+      }
+    }
+
+    await renderReceiptList()
+    if (errors.length > 0) {
+      alert(`Не удалось добавить некоторые фотографии:\n\n${errors.join('\n')}`)
+    }
+  })
+
+  receiptList.addEventListener('click', async (event) => {
+    const target = event.target
+    if (!(target instanceof Element)) {
+      return
+    }
+    const deleteButton =
+      target.closest<HTMLButtonElement>('[data-delete-receipt]')
+    const receiptId = deleteButton?.dataset.deleteReceipt
+    if (!receiptId) {
+      return
+    }
+
+    if (!confirm('Удалить эту квитанцию?')) {
+      return
+    }
+    await deleteReceipt(receiptId)
+    await renderReceiptList()
+  })
+
   app.addEventListener(
     'click',
     (event) => {
       const target = event.target
       if (!(target instanceof Element)) {
+        return
+      }
+
+      const receiptButton =
+        target.closest<HTMLButtonElement>('[data-receipts-booking-id]')
+      const receiptBookingId = receiptButton?.dataset.receiptsBookingId
+      if (receiptBookingId) {
+        event.preventDefault()
+        event.stopPropagation()
+        void openReceiptManager(receiptBookingId)
         return
       }
 
@@ -1411,13 +1645,16 @@ async function renderUpcomingBookings(
               ${escapeHtml(getHouseName(booking.houseId))}
             </span>
 
-            <span class="booking-type">
-              ${
-                booking.rentalType === 'overnight'
-                  ? 'С ночёвкой'
-                  : 'Без ночёвки'
-              }
-            </span>
+            <div class="booking-card-actions">
+              <span class="booking-type">
+                ${
+                  booking.rentalType === 'overnight'
+                    ? 'С ночёвкой'
+                    : 'Без ночёвки'
+                }
+              </span>
+              ${renderReceiptButton(booking)}
+            </div>
           </div>
 
           <strong class="booking-guest">
@@ -1562,11 +1799,14 @@ async function renderSearchResults(query: string) {
               ${escapeHtml(getHouseName(booking.houseId))}
             </span>
 
-            <span class="booking-type">
-              ${booking.rentalType === 'overnight'
-                ? 'С ночёвкой'
-                : 'Без ночёвки'}
-            </span>
+            <div class="booking-card-actions">
+              <span class="booking-type">
+                ${booking.rentalType === 'overnight'
+                  ? 'С ночёвкой'
+                  : 'Без ночёвки'}
+              </span>
+              ${renderReceiptButton(booking)}
+            </div>
           </div>
 
           <strong class="booking-guest">
@@ -1693,11 +1933,21 @@ renderBackupStatus()
 
 exportBackupButton.addEventListener('click', async () => {
   const bookings = await getAllBookings()
+  const receipts = await getAllReceipts()
 
   const backup = {
     version: 1,
     createdAt: new Date().toISOString(),
     bookings,
+    receipts: await Promise.all(
+      receipts.map(async (receipt) => ({
+        id: receipt.id,
+        bookingId: receipt.bookingId,
+        fileName: receipt.fileName,
+        createdAt: receipt.createdAt,
+        dataUrl: await blobToDataUrl(receipt.pdf),
+      })),
+    ),
   }
 
   const json = JSON.stringify(backup, null, 2)
@@ -1761,7 +2011,8 @@ backupFileInput.addEventListener('change', async () => {
     }
 
     const confirmed = confirm(
-      `Найдено бронирований: ${backup.bookings.length}.\n\n` +
+      `Найдено бронирований: ${backup.bookings.length}.\n` +
+      `Квитанций: ${Array.isArray(backup.receipts) ? backup.receipts.length : 0}.\n\n` +
       'Текущие данные будут заменены данными из резервной копии.\n\n' +
       'Продолжить?',
     )
@@ -1770,7 +2021,36 @@ backupFileInput.addEventListener('change', async () => {
       return
     }
 
-    await replaceAllBookings(backup.bookings)
+    const bookingIds = new Set(
+      backup.bookings.map((booking: Booking) => booking.id),
+    )
+    const importedReceipts: Receipt[] = []
+    if (backup.receipts !== undefined && !Array.isArray(backup.receipts)) {
+      throw new Error('Некорректный список квитанций в резервной копии.')
+    }
+    for (const receipt of backup.receipts ?? []) {
+      if (
+        !receipt ||
+        typeof receipt.id !== 'string' ||
+        typeof receipt.bookingId !== 'string' ||
+        typeof receipt.fileName !== 'string' ||
+        typeof receipt.createdAt !== 'string' ||
+        typeof receipt.dataUrl !== 'string' ||
+        !bookingIds.has(receipt.bookingId)
+      ) {
+        throw new Error('Некорректная квитанция в резервной копии.')
+      }
+
+      importedReceipts.push({
+        id: receipt.id,
+        bookingId: receipt.bookingId,
+        fileName: receipt.fileName,
+        createdAt: receipt.createdAt,
+        pdf: pdfDataUrlToBlob(receipt.dataUrl),
+      })
+    }
+
+    await replaceAllBookings(backup.bookings, importedReceipts)
 
     const importedHouseCount = backup.bookings.reduce(
       (maxHouseId: number, booking: Booking) =>
@@ -2019,6 +2299,7 @@ async function renderSelectedDayBookings() {
                     <span>${start.toLocaleString('ru-RU')} — ${end.toLocaleString('ru-RU')}</span>
                     <span>Гостей: ${booking.guestCount} · Оплачено: ${booking.paidAmount.toLocaleString('ru-RU')} ֏ · Осталось: ${remaining.toLocaleString('ru-RU')} ֏</span>
                     ${booking.guestPhone ? renderContactPhoneButton(booking.guestPhone) : ''}
+                    ${renderReceiptButton(booking)}
                     ${booking.comment ? `<span>Комментарий: ${booking.comment}</span>` : ''}
                   </article>
                 `
@@ -2639,6 +2920,19 @@ detailsBackdrop.addEventListener(
       }
 
       <div class="details-actions">
+        ${
+          (booking.status ?? 'confirmed') === 'confirmed'
+            ? `
+              <button
+                class="details-receipts-button"
+                data-receipts-booking-id="${booking.id}"
+              >
+                🧾 Квитанции
+              </button>
+            `
+            : ''
+        }
+
         <button
           class="details-edit-button"
           data-edit-id="${booking.id}"
