@@ -90,6 +90,7 @@ h1 {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  cursor: pointer;
 
   min-height: 82px;
   padding: 20px;
@@ -98,6 +99,12 @@ h1 {
   border-radius: 18px;
 
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+}
+
+.house:hover,
+.house:focus-visible {
+  outline: 2px solid #d2d2d7;
+  outline-offset: 2px;
 }
 
 .house-name {
@@ -208,6 +215,17 @@ form label {
   font-weight: 600;
 }
 
+.date-time-inputs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 8px;
+}
+
+.date-time-inputs input[type="text"] {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 input,
 select,
 textarea {
@@ -220,6 +238,7 @@ textarea {
   background: white;
   color: #1d1d1f;
   font: inherit;
+  font-size: 16px;
 }
 
 input:focus,
@@ -605,8 +624,8 @@ textarea {
   justify-items: center;
   gap: 2px;
 
-  min-width: 100px;
-  padding: 8px 16px;
+  min-width: 72px;
+  padding: 8px 10px;
 
   border: none;
   border-radius: 11px;
@@ -915,6 +934,62 @@ body {
 .backup-button.secondary {
   background: #f2f2f7;
   color: #1d1d1f;
+}
+
+.house-settings-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.house-removal-controls {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.house-removal-controls label {
+  color: #86868b;
+  font-size: 14px;
+}
+
+.house-removal-controls select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #d2d2d7;
+  border-radius: 12px;
+  padding: 0 12px;
+  background: white;
+  color: #1d1d1f;
+  font: inherit;
+}
+
+.house-name-controls {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.house-name-controls label {
+  color: #86868b;
+  font-size: 14px;
+}
+
+.house-name-controls select,
+.house-name-controls input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #d2d2d7;
+  border-radius: 12px;
+  padding: 0 12px;
+  background: white;
+  color: #1d1d1f;
+  font: inherit;
+  font-size: 16px;
+}
+
+.backup-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .backup-status {

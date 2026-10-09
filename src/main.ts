@@ -7,7 +7,39 @@ import {
   updateBooking,
   deleteBooking,
   replaceAllBookings,
+  getHouseCount,
+  getHouseNames,
+  setHouseCount,
+  setHouseName,
+  removeHouseAndBookings,
 } from './storage/bookingRepository'
+
+let configuredHouseCount = 0
+let configuredHouseNames: Record<number, string> = {}
+
+function getHouseIds(): number[] {
+  return Array.from(
+    { length: configuredHouseCount },
+    (_, index) => index + 1,
+  )
+}
+
+function getHouseName(houseId: number): string {
+  return configuredHouseNames[houseId]?.trim() || `Дом ${houseId}`
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => {
+    const entities: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    }
+    return entities[character]
+  })
+}
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 
@@ -129,6 +161,37 @@ app.innerHTML = `
 />
 </section>
 </main>
+  <main class="app hidden-page" id="settingsPage">
+  <div class="search-header">
+    <p class="date">Приложение</p>
+    <h1>Настройки</h1>
+  </div>
+  <section class="backup-section">
+  <h2>Дома</h2>
+  <p id="houseCountSetting">Количество домов: —</p>
+  <div class="house-settings-actions">
+    <button class="backup-button" id="addHouse">
+      Добавить дом
+    </button>
+    <div class="house-removal-controls">
+      <label for="houseToRemove">Какой дом удалить?</label>
+      <select id="houseToRemove"></select>
+      <button class="backup-button secondary" id="removeHouse">
+        Удалить выбранный дом
+      </button>
+    </div>
+  </div>
+  <div class="house-name-controls">
+    <label for="houseToRename">Какой дом переименовать?</label>
+    <select id="houseToRename"></select>
+    <label for="houseNameInput">Название дома</label>
+    <input id="houseNameInput" type="text" maxlength="60" autocomplete="off">
+    <button class="backup-button secondary" id="saveHouseName">
+      Сохранить название
+    </button>
+  </div>
+</section>
+</main>
   <nav class="bottom-nav">
   <button class="nav-button active" id="todayNav">
     <span>⌂</span>
@@ -144,7 +207,36 @@ app.innerHTML = `
     <span>⌕</span>
     Поиск
   </button>
+
+  <button class="nav-button" id="settingsNav">
+    <span>⚙</span>
+    Настройки
+  </button>
 </nav>
+  <div class="modal hidden" id="houseSetupModal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Настройка домов</h2>
+      </div>
+      <form id="houseSetupForm">
+        <label>
+          Сколько домов добавить?
+          <input
+            type="number"
+            name="houseCount"
+            min="1"
+            step="1"
+            value="1"
+            required
+          >
+        </label>
+        <button type="submit" class="submit-button">
+          Продолжить
+        </button>
+      </form>
+    </div>
+  </div>
   <div class="modal hidden" id="bookingModal">
     <div class="modal-backdrop" id="modalBackdrop"></div>
 
@@ -158,11 +250,7 @@ app.innerHTML = `
 
         <label>
           Дом
-          <select name="house" required>
-            <option value="1">Дом 1</option>
-            <option value="2">Дом 2</option>
-            <option value="3">Дом 3</option>
-          </select>
+          <select name="house" required></select>
         </label>
 
         <div class="rental-types">
@@ -189,12 +277,36 @@ app.innerHTML = `
         <div class="two-columns">
           <label>
             Заезд
-            <input type="datetime-local" name="start" required>
+            <span class="date-time-inputs">
+              <input type="date" data-date-for="start" required>
+              <input
+                type="text"
+                data-time-for="start"
+                inputmode="numeric"
+                maxlength="5"
+                placeholder="14:00"
+                aria-label="Время заезда"
+                required
+              >
+            </span>
+            <input type="hidden" name="start">
           </label>
 
           <label>
             Выезд
-            <input type="datetime-local" name="end" required>
+            <span class="date-time-inputs">
+              <input type="date" data-date-for="end" required>
+              <input
+                type="text"
+                data-time-for="end"
+                inputmode="numeric"
+                maxlength="5"
+                placeholder="11:00"
+                aria-label="Время выезда"
+                required
+              >
+            </span>
+            <input type="hidden" name="end">
           </label>
         </div>
 
@@ -302,7 +414,7 @@ app.innerHTML = `
 
       <form id="quickPendingForm">
         <label>
-          Дом, заезд, выезд, цена
+          Номер дома, заезд, выезд, цена
           <input
             type="text"
             name="bookingLine"
@@ -312,7 +424,7 @@ app.innerHTML = `
             required
           >
           <span class="quick-pending-hint">
-            Вводите через пробел. Год в датах можно не указывать.
+            Вводите через пробел. В первом поле укажите номер дома; год в датах можно не указывать.
           </span>
         </label>
 
@@ -363,8 +475,14 @@ const calendarNav =
 const searchPage =
   document.querySelector<HTMLElement>('#searchPage')!
 
+const settingsPage =
+  document.querySelector<HTMLElement>('#settingsPage')!
+
 const searchNav =
   document.querySelector<HTMLButtonElement>('#searchNav')!
+
+const settingsNav =
+  document.querySelector<HTMLButtonElement>('#settingsNav')!
 
 const todayDate =
   document.querySelector<HTMLElement>('#todayDate')!
@@ -385,20 +503,24 @@ function showTodayPage() {
   todayPage.classList.remove('hidden-page')
   calendarPage.classList.add('hidden-page')
   searchPage.classList.add('hidden-page')
+  settingsPage.classList.add('hidden-page')
 
   todayNav.classList.add('active')
   calendarNav.classList.remove('active')
   searchNav.classList.remove('active')
+  settingsNav.classList.remove('active')
 }
 
 function showCalendarPage() {
   todayPage.classList.add('hidden-page')
   calendarPage.classList.remove('hidden-page')
   searchPage.classList.add('hidden-page')
+  settingsPage.classList.add('hidden-page')
 
   todayNav.classList.remove('active')
   calendarNav.classList.add('active')
   searchNav.classList.remove('active')
+  settingsNav.classList.remove('active')
 
   renderCalendar()
 }
@@ -407,15 +529,30 @@ function showSearchPage() {
   todayPage.classList.add('hidden-page')
   calendarPage.classList.add('hidden-page')
   searchPage.classList.remove('hidden-page')
+  settingsPage.classList.add('hidden-page')
 
   todayNav.classList.remove('active')
   calendarNav.classList.remove('active')
   searchNav.classList.add('active')
+  settingsNav.classList.remove('active')
+}
+
+function showSettingsPage() {
+  todayPage.classList.add('hidden-page')
+  calendarPage.classList.add('hidden-page')
+  searchPage.classList.add('hidden-page')
+  settingsPage.classList.remove('hidden-page')
+
+  todayNav.classList.remove('active')
+  calendarNav.classList.remove('active')
+  searchNav.classList.remove('active')
+  settingsNav.classList.add('active')
 }
 
 todayNav.addEventListener('click', showTodayPage)
 calendarNav.addEventListener('click', showCalendarPage)
 searchNav.addEventListener('click', showSearchPage)
+settingsNav.addEventListener('click', showSettingsPage)
 
 const modal = document.querySelector<HTMLDivElement>('#bookingModal')!
 const addButton = document.querySelector<HTMLButtonElement>('#addBooking')!
@@ -432,12 +569,23 @@ closeButton.addEventListener('click', closeModal)
 backdrop.addEventListener('click', closeModal)
 
 const form = document.querySelector<HTMLFormElement>('#bookingForm')!
+const houseSelect =
+  form.elements.namedItem('house') as HTMLSelectElement
 
 const startInput =
   form.elements.namedItem('start') as HTMLInputElement
 
 const endInput =
   form.elements.namedItem('end') as HTMLInputElement
+
+const startDateInput =
+  form.querySelector<HTMLInputElement>('[data-date-for="start"]')!
+const endDateInput =
+  form.querySelector<HTMLInputElement>('[data-date-for="end"]')!
+const startTimeInput =
+  form.querySelector<HTMLInputElement>('[data-time-for="start"]')!
+const endTimeInput =
+  form.querySelector<HTMLInputElement>('[data-time-for="end"]')!
 
 let editingBookingId: string | null = null
 
@@ -455,6 +603,53 @@ const paidInput =
 
 const remainingAmount =
   document.querySelector<HTMLElement>('#remainingAmount')!
+
+function renderHouseOptions(selectedHouseId = 1) {
+  houseSelect.innerHTML = getHouseIds()
+    .map(
+      (houseId) =>
+        `<option value="${houseId}">${escapeHtml(getHouseName(houseId))}</option>`,
+    )
+    .join('')
+
+  houseSelect.value = String(
+    Math.min(Math.max(selectedHouseId, 1), configuredHouseCount),
+  )
+}
+
+function updateHouseSettings() {
+  const countLabel =
+    document.querySelector<HTMLElement>('#houseCountSetting')!
+  const houseToRemoveSelect =
+    document.querySelector<HTMLSelectElement>('#houseToRemove')!
+  const houseToRenameSelect =
+    document.querySelector<HTMLSelectElement>('#houseToRename')!
+  const houseNameInput =
+    document.querySelector<HTMLInputElement>('#houseNameInput')!
+  const removeHouseButton =
+    document.querySelector<HTMLButtonElement>('#removeHouse')!
+  const selectedRemoveHouseId = Number(houseToRemoveSelect.value) || 1
+  const selectedRenameHouseId = Number(houseToRenameSelect.value) || 1
+
+  countLabel.textContent = `Количество домов: ${configuredHouseCount}`
+  const houseOptions = getHouseIds()
+    .map(
+      (houseId) =>
+        `<option value="${houseId}">${escapeHtml(getHouseName(houseId))}</option>`,
+    )
+    .join('')
+  houseToRemoveSelect.innerHTML = houseOptions
+  houseToRenameSelect.innerHTML = houseOptions
+  houseToRemoveSelect.value = String(
+    Math.min(selectedRemoveHouseId, configuredHouseCount),
+  )
+  houseToRenameSelect.value = String(
+    Math.min(selectedRenameHouseId, configuredHouseCount),
+  )
+  houseNameInput.value = getHouseName(Number(houseToRenameSelect.value))
+  houseToRemoveSelect.disabled = configuredHouseCount <= 1
+  removeHouseButton.disabled = configuredHouseCount <= 1
+}
 
 function updateRemaining() {
   const price = Number(priceInput.value) || 0
@@ -474,6 +669,54 @@ function formatDateTimeLocal(date: Date): string {
   const minutes = String(date.getMinutes()).padStart(2, '0')
 
   return `${year}-${month}-${day}T${hours}:${minutes}`
+}
+
+function normalizeTime(value: string): string | null {
+  const digits = value.replace(/\D/g, '').slice(0, 4)
+
+  if (digits.length === 0) {
+    return null
+  }
+
+  const paddedDigits =
+    digits.length === 3
+      ? `${digits.slice(0, 2)}${digits.slice(2).padStart(2, '0')}`
+      : digits.padStart(2, '0').padEnd(4, '0')
+  const hours = Number(paddedDigits.slice(0, 2))
+  const minutes = Number(paddedDigits.slice(2, 4))
+
+  if (hours > 23 || minutes > 59) {
+    return null
+  }
+
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+}
+
+function setVisibleDateTimeValues() {
+  for (const [valueInput, dateInput, timeInput] of [
+    [startInput, startDateInput, startTimeInput],
+    [endInput, endDateInput, endTimeInput],
+  ]) {
+    const [date, time] = valueInput.value.split('T')
+    dateInput.value = date ?? ''
+    timeInput.value = time ?? ''
+  }
+}
+
+function updateHiddenDateTime(
+  valueInput: HTMLInputElement,
+  dateInput: HTMLInputElement,
+  timeInput: HTMLInputElement,
+): boolean {
+  const normalizedTime = normalizeTime(timeInput.value)
+
+  if (!dateInput.value || !normalizedTime) {
+    return false
+  }
+
+  timeInput.value = normalizedTime
+  valueInput.value = `${dateInput.value}T${normalizedTime}`
+  return true
 }
 
 function parseQuickBookingDate(value: string): Date | null {
@@ -499,6 +742,16 @@ function parseQuickBookingDate(value: string): Date | null {
   return date
 }
 
+function isPastCalendarDate(date: Date): boolean {
+  const selectedDate = new Date(date)
+  selectedDate.setHours(0, 0, 0, 0)
+
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  return selectedDate < today
+}
+
 function updateOvernightDates() {
   const rentalType =
     form.querySelector<HTMLInputElement>(
@@ -508,6 +761,9 @@ function updateOvernightDates() {
   if (rentalType?.value !== 'overnight') {
     return
   }
+
+  endDateInput.removeAttribute('min')
+  endDateInput.removeAttribute('max')
 
   if (!startInput.value) {
     return
@@ -522,6 +778,37 @@ function updateOvernightDates() {
 
   startInput.value = formatDateTimeLocal(start)
   endInput.value = formatDateTimeLocal(end)
+  setVisibleDateTimeValues()
+}
+
+function updateDayRentalEnd() {
+  if (!startInput.value) {
+    return
+  }
+
+  const start = new Date(startInput.value)
+  const defaultEnd = new Date(start)
+  defaultEnd.setHours(23, 0, 0, 0)
+
+  endInput.value = formatDateTimeLocal(defaultEnd)
+  endDateInput.value = startInput.value.slice(0, 10)
+  endDateInput.min = endDateInput.value
+  endDateInput.max = endDateInput.value
+  endTimeInput.value = '23:00'
+}
+
+function constrainDayRentalEndDate() {
+  if (!startInput.value || !endInput.value) {
+    return
+  }
+
+  const startDate = startInput.value.slice(0, 10)
+  const endTime = normalizeTime(endTimeInput.value) ?? '23:00'
+
+  endInput.value = `${startDate}T${endTime}`
+  endDateInput.value = startDate
+  endDateInput.min = startDate
+  endDateInput.max = startDate
 }
 
 function openModal(
@@ -544,6 +831,10 @@ function openModal(
 
   startInput.value = formatDateTimeLocal(start)
   endInput.value = formatDateTimeLocal(end)
+  setVisibleDateTimeValues()
+  endDateInput.removeAttribute('min')
+  endDateInput.removeAttribute('max')
+  startDateInput.min = formatDateTimeLocal(new Date()).slice(0, 10)
 
   if (selectedHouseId) {
     const houseInput =
@@ -557,7 +848,98 @@ function openModal(
 }
 
 addButton.addEventListener('click', () => openModal())
-startInput.addEventListener('change', updateOvernightDates)
+
+startDateInput.addEventListener('change', () => {
+  const rentalType = form.querySelector<HTMLInputElement>(
+    'input[name="rentalType"]:checked',
+  )
+
+  if (!updateHiddenDateTime(startInput, startDateInput, startTimeInput)) {
+    return
+  }
+
+  if (rentalType?.value === 'day') {
+    updateDayRentalEnd()
+  } else {
+    updateOvernightDates()
+  }
+})
+
+endDateInput.addEventListener('change', () => {
+  const rentalType = form.querySelector<HTMLInputElement>(
+    'input[name="rentalType"]:checked',
+  )
+
+  if (rentalType?.value === 'day') {
+    constrainDayRentalEndDate()
+  } else {
+    updateHiddenDateTime(endInput, endDateInput, endTimeInput)
+  }
+})
+
+for (const [valueInput, dateInput, timeInput] of [
+  [startInput, startDateInput, startTimeInput],
+  [endInput, endDateInput, endTimeInput],
+]) {
+  timeInput.addEventListener('focus', () => {
+    timeInput.select()
+  })
+
+  timeInput.addEventListener('input', () => {
+    const digits = timeInput.value.replace(/\D/g, '').slice(0, 4)
+    timeInput.value =
+      digits.length > 2
+        ? `${digits.slice(0, 2)}:${digits.slice(2)}`
+        : digits
+
+    if (digits.length === 4) {
+      updateHiddenDateTime(valueInput, dateInput, timeInput)
+    }
+  })
+
+  timeInput.addEventListener('blur', () => {
+    if (!timeInput.value.trim()) {
+      return
+    }
+
+    const normalizedTime = normalizeTime(timeInput.value)
+
+    if (!normalizedTime) {
+      alert('Введите время четырьмя цифрами, например 1730.')
+      timeInput.value = valueInput.value.split('T')[1] ?? ''
+      return
+    }
+
+    timeInput.value = normalizedTime
+    updateHiddenDateTime(valueInput, dateInput, timeInput)
+
+    if (valueInput === endInput) {
+      const rentalType = form.querySelector<HTMLInputElement>(
+        'input[name="rentalType"]:checked',
+      )
+
+      if (rentalType?.value === 'day') {
+        constrainDayRentalEndDate()
+      }
+    }
+  })
+}
+
+form
+  .querySelectorAll<HTMLInputElement>('input[name="rentalType"]')
+  .forEach((radio) => {
+    radio.addEventListener('change', () => {
+      if (!radio.checked) {
+        return
+      }
+
+      if (radio.value === 'day') {
+        updateDayRentalEnd()
+      } else {
+        updateOvernightDates()
+      }
+    })
+  })
 
 const quickPendingModal =
   document.querySelector<HTMLDivElement>('#quickPendingModal')!
@@ -602,13 +984,22 @@ quickPendingForm.addEventListener('submit', async (event) => {
   const endDate = parseQuickBookingDate(endPart)
   const totalPrice = Number(pricePart)
 
-  if (houseId !== 1 && houseId !== 2 && houseId !== 3) {
-    alert('Номер дома должен быть 1, 2 или 3.')
+  if (
+    !Number.isSafeInteger(houseId) ||
+    houseId < 1 ||
+    houseId > configuredHouseCount
+  ) {
+    alert(`Номер дома должен быть от 1 до ${configuredHouseCount}.`)
     return
   }
 
   if (!startDate || !endDate) {
     alert('Введите даты в формате дд.мм или дд.мм.гггг.')
+    return
+  }
+
+  if (isPastCalendarDate(startDate)) {
+    alert('Нельзя создать предварительную бронь на прошедшую дату.')
     return
   }
 
@@ -674,7 +1065,7 @@ async function renderHouses() {
 
   housesContainer.innerHTML = ''
 
-  for (const houseId of [1, 2, 3] as const) {
+  for (const houseId of getHouseIds()) {
     const currentBooking = bookings.find((booking) => {
       if (booking.houseId !== houseId) {
         return false
@@ -688,11 +1079,19 @@ async function renderHouses() {
 
     const house = document.createElement('article')
     house.className = 'house'
+    house.dataset.houseId = String(houseId)
+    house.tabIndex = 0
+    house.setAttribute('role', 'button')
+    const houseName = getHouseName(houseId)
 
     if (!currentBooking) {
+      house.setAttribute(
+        'aria-label',
+        `${houseName} свободен. Создать бронь`,
+      )
       house.innerHTML = `
         <div>
-          <span class="house-name">Дом ${houseId}</span>
+          <span class="house-name">${escapeHtml(houseName)}</span>
           <span class="status free">● Свободен</span>
         </div>
       `
@@ -703,13 +1102,18 @@ async function renderHouses() {
       const end = new Date(currentBooking.endAt)
 
       house.classList.add('occupied')
+      house.dataset.bookingId = currentBooking.id
+      house.setAttribute(
+        'aria-label',
+        `${houseName} занят. Открыть бронь: ${currentBooking.guestName}`,
+      )
 
       house.innerHTML = `
         <div class="booking-info">
 
           <div class="house-top">
             <span class="house-name">
-              Дом ${houseId}
+              ${escapeHtml(houseName)}
             </span>
 
             <span class="status busy">
@@ -757,6 +1161,48 @@ async function renderHouses() {
     housesContainer.appendChild(house)
   }
 }
+
+const housesContainer =
+  document.querySelector<HTMLDivElement>('#houses')!
+
+function handleHouseActivation(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return
+  }
+
+  const house = target.closest<HTMLElement>('.house[data-house-id]')
+  const houseId = Number(house?.dataset.houseId)
+
+  if (
+    !house ||
+    !Number.isSafeInteger(houseId) ||
+    houseId < 1 ||
+    houseId > configuredHouseCount
+  ) {
+    return
+  }
+
+  const bookingId = house.dataset.bookingId
+  if (bookingId) {
+    void openBookingDetails(bookingId)
+  } else {
+    openModal(undefined, houseId)
+  }
+}
+
+housesContainer.addEventListener('click', (event) => {
+  handleHouseActivation(event.target)
+})
+
+housesContainer.addEventListener('keydown', (event) => {
+  if (
+    event instanceof KeyboardEvent &&
+    (event.key === 'Enter' || event.key === ' ')
+  ) {
+    event.preventDefault()
+    handleHouseActivation(event.target)
+  }
+})
 
 let bookingListMode: 'upcoming' | 'recent' = 'upcoming'
 
@@ -844,7 +1290,7 @@ async function renderUpcomingBookings(
         >
           <div class="booking-card-top">
             <span class="booking-house">
-              Дом ${booking.houseId}
+              ${escapeHtml(getHouseName(booking.houseId))}
             </span>
 
             <span class="booking-type">
@@ -995,7 +1441,7 @@ async function renderSearchResults(query: string) {
         >
           <div class="booking-card-top">
             <span class="booking-house">
-              Дом ${booking.houseId}
+              ${escapeHtml(getHouseName(booking.houseId))}
             </span>
 
             <span class="booking-type">
@@ -1212,6 +1658,21 @@ backupFileInput.addEventListener('change', async () => {
 
     await replaceAllBookings(backup.bookings)
 
+    const importedHouseCount = backup.bookings.reduce(
+      (maxHouseId: number, booking: Booking) =>
+        Number.isSafeInteger(booking.houseId) && booking.houseId > maxHouseId
+          ? booking.houseId
+          : maxHouseId,
+      configuredHouseCount,
+    )
+
+    if (importedHouseCount !== configuredHouseCount) {
+      configuredHouseCount = importedHouseCount
+      await setHouseCount(configuredHouseCount)
+      renderHouseOptions()
+      updateHouseSettings()
+    }
+
     await refreshBookingViews()
 
     alert('Резервная копия успешно восстановлена.')
@@ -1233,6 +1694,24 @@ function dateKey(date: Date): string {
 function parseDateKey(value: string): Date {
   const [year, month, day] = value.split('-').map(Number)
   return new Date(year, month - 1, day)
+}
+
+function bookingOccupiesCalendarDay(
+  booking: Booking,
+  dayStart: Date,
+  nextDay: Date,
+): boolean {
+  const start = new Date(booking.startAt)
+  const end = new Date(booking.endAt)
+  const checkoutMinutes = end.getHours() * 60 + end.getMinutes()
+  const occupiedUntil = new Date(end)
+
+  occupiedUntil.setHours(0, 0, 0, 0)
+  if (checkoutMinutes > 11 * 60) {
+    occupiedUntil.setDate(occupiedUntil.getDate() + 1)
+  }
+
+  return start < nextDay && occupiedUntil > dayStart
 }
 
 async function renderCalendar() {
@@ -1276,19 +1755,17 @@ async function renderCalendar() {
     nextDay.setDate(nextDay.getDate() + 1)
 
     const dayBookings = bookings.filter(
-      (booking) =>
-        new Date(booking.startAt) < nextDay &&
-        new Date(booking.endAt) > dayStart,
+      (booking) => bookingOccupiesCalendarDay(booking, dayStart, nextDay),
     )
 
-    const houseIndicators = ([1, 2, 3] as const)
+    const houseIndicators = getHouseIds()
       .map((houseId) => {
         const houseBookings = dayBookings.filter(
           (booking) => booking.houseId === houseId,
         )
 
         if (houseBookings.length === 0) {
-          return `<span class="month-house free">Д${houseId} свободен</span>`
+          return `<span class="month-house free">${escapeHtml(getHouseName(houseId))} свободен</span>`
         }
 
         const hasConfirmed = houseBookings.some(
@@ -1302,7 +1779,7 @@ async function renderCalendar() {
 
         return `
           <span class="month-house ${statusClass}">
-            Д${houseId} ${countLabel}
+            ${escapeHtml(getHouseName(houseId))} ${countLabel}
           </span>
         `
       })
@@ -1381,14 +1858,13 @@ async function renderSelectedDayBookings() {
     year: 'numeric',
   })
 
-  selectedDayBookings.innerHTML = ([1, 2, 3] as const)
+  selectedDayBookings.innerHTML = getHouseIds()
     .map((houseId) => {
       const houseBookings = bookings
         .filter(
           (booking) =>
             booking.houseId === houseId &&
-            new Date(booking.startAt) < nextDay &&
-            new Date(booking.endAt) > dayStart,
+            bookingOccupiesCalendarDay(booking, dayStart, nextDay),
         )
         .sort((a, b) => {
           const aPending = (a.status ?? 'confirmed') === 'pending'
@@ -1437,7 +1913,7 @@ async function renderSelectedDayBookings() {
       return `
         <section class="day-house-section">
           <div class="day-house-heading">
-            <h3>Дом ${houseId}</h3>
+            <h3>${escapeHtml(getHouseName(houseId))}</h3>
             <button
               type="button"
               class="day-add-booking"
@@ -1511,9 +1987,183 @@ selectedDayBookings.addEventListener('click', (event) => {
   }
 })
 
-renderHouses()
-renderUpcomingBookings()
-renderCalendar()
+const houseSetupModal =
+  document.querySelector<HTMLDivElement>('#houseSetupModal')!
+const houseSetupForm =
+  document.querySelector<HTMLFormElement>('#houseSetupForm')!
+const addHouseButton =
+  document.querySelector<HTMLButtonElement>('#addHouse')!
+const removeHouseButton =
+  document.querySelector<HTMLButtonElement>('#removeHouse')!
+const houseToRenameSelect =
+  document.querySelector<HTMLSelectElement>('#houseToRename')!
+const houseNameInput =
+  document.querySelector<HTMLInputElement>('#houseNameInput')!
+const saveHouseNameButton =
+  document.querySelector<HTMLButtonElement>('#saveHouseName')!
+
+houseToRenameSelect.addEventListener('change', () => {
+  houseNameInput.value = getHouseName(Number(houseToRenameSelect.value))
+})
+
+saveHouseNameButton.addEventListener('click', async () => {
+  const houseId = Number(houseToRenameSelect.value)
+  const name = houseNameInput.value.trim()
+
+  if (
+    !Number.isSafeInteger(houseId) ||
+    houseId < 1 ||
+    houseId > configuredHouseCount
+  ) {
+    throw new Error(
+      `Invalid house selected for renaming: ${houseToRenameSelect.value}`,
+    )
+  }
+  if (!name) {
+    alert('Введите название дома.')
+    houseNameInput.focus()
+    return
+  }
+
+  await setHouseName(houseId, name)
+  configuredHouseNames[houseId] = name
+  updateHouseSettings()
+  renderHouseOptions(Number(houseSelect.value))
+  await refreshBookingViews()
+})
+
+houseSetupForm.addEventListener('submit', async (event) => {
+  event.preventDefault()
+
+  const formData = new FormData(houseSetupForm)
+  const houseCount = Number(formData.get('houseCount'))
+
+  if (!Number.isSafeInteger(houseCount) || houseCount < 1) {
+    alert('Введите целое положительное число домов.')
+    return
+  }
+
+  await setHouseCount(houseCount)
+  configuredHouseCount = houseCount
+  renderHouseOptions()
+  updateHouseSettings()
+  houseSetupModal.classList.add('hidden')
+  await refreshBookingViews()
+})
+
+addHouseButton.addEventListener('click', async () => {
+  if (!Number.isSafeInteger(configuredHouseCount + 1)) {
+    alert('Нельзя добавить больше домов: достигнут предел числового значения.')
+    return
+  }
+
+  const newHouseCount = configuredHouseCount + 1
+  await setHouseCount(newHouseCount)
+  configuredHouseCount = newHouseCount
+  renderHouseOptions(configuredHouseCount)
+  updateHouseSettings()
+  await refreshBookingViews()
+})
+
+removeHouseButton.addEventListener('click', async () => {
+  if (configuredHouseCount <= 1) {
+    alert('В приложении должен остаться хотя бы один дом.')
+    return
+  }
+
+  const houseToRemoveSelect =
+    document.querySelector<HTMLSelectElement>('#houseToRemove')!
+  const houseId = Number(houseToRemoveSelect.value)
+  if (
+    !Number.isSafeInteger(houseId) ||
+    houseId < 1 ||
+    houseId > configuredHouseCount
+  ) {
+    throw new Error(
+      `Invalid house selected for removal: ${houseToRemoveSelect.value}`,
+    )
+  }
+
+  const bookings = await getAllBookings()
+  const houseBookings = bookings.filter(
+    (booking) => booking.houseId === houseId,
+  )
+
+  const message =
+    houseBookings.length > 0
+      ? `В «${getHouseName(houseId)}» есть брони (${houseBookings.length}). Удалить этот дом и все его брони?`
+      : `Удалить дом «${getHouseName(houseId)}»?`
+
+  if (!confirm(message)) {
+    return
+  }
+
+  const newHouseCount = configuredHouseCount - 1
+  await removeHouseAndBookings(houseId, newHouseCount)
+  configuredHouseCount = newHouseCount
+  configuredHouseNames = await getHouseNames()
+  renderHouseOptions()
+  updateHouseSettings()
+  await refreshBookingViews()
+})
+
+async function initializeHouseConfiguration() {
+  const savedHouseCount = await getHouseCount()
+  configuredHouseNames = await getHouseNames()
+
+  if (savedHouseCount === undefined) {
+    const bookings = await getAllBookings()
+    const maxExistingHouseId = bookings.reduce(
+      (maxHouseId, booking) =>
+        Number.isSafeInteger(booking.houseId) && booking.houseId > maxHouseId
+          ? booking.houseId
+          : maxHouseId,
+      0,
+    )
+
+    if (bookings.length > 0) {
+      configuredHouseCount = Math.max(3, maxExistingHouseId)
+      await setHouseCount(configuredHouseCount)
+    } else {
+      houseSetupModal.classList.remove('hidden')
+      return
+    }
+  } else if (
+    !Number.isSafeInteger(savedHouseCount) ||
+    savedHouseCount < 1
+  ) {
+    throw new Error(`Invalid saved house count: ${savedHouseCount}`)
+  } else {
+    configuredHouseCount = savedHouseCount
+  }
+
+  renderHouseOptions()
+  updateHouseSettings()
+  await refreshBookingViews()
+}
+
+void initializeHouseConfiguration()
+
+function refreshHouseOccupancyWhenVisible() {
+  if (
+    document.visibilityState === 'visible' &&
+    configuredHouseCount > 0
+  ) {
+    void renderHouses()
+
+    if (bookingListMode === 'upcoming') {
+      void renderUpcomingBookings('upcoming')
+    }
+  }
+}
+
+window.setInterval(refreshHouseOccupancyWhenVisible, 30_000)
+window.addEventListener('focus', refreshHouseOccupancyWhenVisible)
+window.addEventListener('pageshow', refreshHouseOccupancyWhenVisible)
+document.addEventListener(
+  'visibilitychange',
+  refreshHouseOccupancyWhenVisible,
+)
 
 document
   .querySelector('#upcomingBookings')
@@ -1574,6 +2224,7 @@ bookingDetails.addEventListener('click', async (event) => {
 
     editingBookingId = booking.id
     saveBookingButton.textContent = 'Сохранить изменения'
+    startDateInput.removeAttribute('min')
 
     const houseInput =
       form.elements.namedItem('house') as HTMLSelectElement
@@ -1593,6 +2244,7 @@ bookingDetails.addEventListener('click', async (event) => {
     houseInput.value = String(booking.houseId)
     startInput.value = booking.startAt.slice(0, 16)
     endInput.value = booking.endAt.slice(0, 16)
+    setVisibleDateTimeValues()
     guestNameInput.value = booking.guestName
     phoneInput.value = booking.guestPhone
     guestCountInput.value = String(booking.guestCount)
@@ -1609,6 +2261,13 @@ bookingDetails.addEventListener('click', async (event) => {
       rentalTypeInput.checked = true
     }
 
+    if (booking.rentalType === 'day') {
+      constrainDayRentalEndDate()
+    } else {
+      endDateInput.removeAttribute('min')
+      endDateInput.removeAttribute('max')
+    }
+
     updateRemaining()
     closeBookingDetails()
     modal.classList.remove('hidden')
@@ -1616,20 +2275,6 @@ bookingDetails.addEventListener('click', async (event) => {
     return
     }
 
-    startInput.addEventListener('change', updateOvernightDates)
-
-form
-  .querySelectorAll<HTMLInputElement>(
-    'input[name="rentalType"]',
-  )
-  .forEach((radio) => {
-    radio.addEventListener('change', () => {
-      if (radio.checked && radio.value === 'overnight') {
-        updateOvernightDates()
-      }
-    })
-  })
-  
   const deleteButton =
   target.closest<HTMLButtonElement>('[data-delete-id]')
 
@@ -1652,7 +2297,7 @@ form
   }
 
   const confirmed = confirm(
-    `Удалить бронь?\n\nДом ${booking.houseId}\n${booking.guestName}`,
+    `Удалить бронь?\n\n${getHouseName(booking.houseId)}\n${booking.guestName}`,
   )
 
   if (!confirmed) {
@@ -1776,7 +2421,7 @@ detailsBackdrop.addEventListener(
   const remaining =
     booking.totalPrice - booking.paidAmount
 
-  houseTitle.textContent = `Дом ${booking.houseId}`
+  houseTitle.textContent = getHouseName(booking.houseId)
 
   details.innerHTML = `
     <div class="details">
@@ -1889,6 +2534,14 @@ detailsBackdrop.addEventListener(
 form.addEventListener('submit', async (event) => {
   event.preventDefault()
 
+  if (
+    !updateHiddenDateTime(startInput, startDateInput, startTimeInput) ||
+    !updateHiddenDateTime(endInput, endDateInput, endTimeInput)
+  ) {
+    alert('Введите время четырьмя цифрами, например 1730.')
+    return
+  }
+
   const submitEvent = event as SubmitEvent
 
   const submitter =
@@ -1906,7 +2559,7 @@ form.addEventListener('submit', async (event) => {
   const booking: Booking = {
     id: crypto.randomUUID(),
 
-    houseId: Number(formData.get('house')) as 1 | 2 | 3,
+    houseId: Number(formData.get('house')),
     rentalType: formData.get('rentalType') as 'overnight' | 'day',
     status: bookingStatus,
 
@@ -1924,6 +2577,14 @@ form.addEventListener('submit', async (event) => {
 
     createdAt: now,
     updatedAt: now,
+  }
+
+  if (
+    booking.rentalType === 'day' &&
+    booking.startAt.slice(0, 10) !== booking.endAt.slice(0, 10)
+  ) {
+    alert('Для аренды без ночёвки дата заезда и выезда должна совпадать.')
+    return
   }
 
   let existingBooking: Booking | undefined
@@ -1944,6 +2605,9 @@ form.addEventListener('submit', async (event) => {
     ) {
       booking.status = 'pending'
     }
+  } else if (isPastCalendarDate(new Date(booking.startAt))) {
+    alert('Нельзя создать бронь на прошедшую дату.')
+    return
   }
   
   if (new Date(booking.endAt) <= new Date(booking.startAt)) {
@@ -1962,7 +2626,7 @@ if (booking.status === 'confirmed') {
 
   if (hasConflict) {
     alert(
-      `Дом ${booking.houseId} уже забронирован на выбранное время.`,
+      `${getHouseName(booking.houseId)} уже забронирован на выбранное время.`,
     )
     return
   }
