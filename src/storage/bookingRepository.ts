@@ -1,4 +1,5 @@
 import { openDB } from 'idb'
+import type { AppLanguage } from '../services/i18n'
 import type { Booking } from '../models/Booking'
 import type { Receipt } from '../models/Receipt'
 
@@ -52,6 +53,27 @@ export async function setHouseCount(count: number): Promise<void> {
   await db.put(SETTINGS_STORE, {
     key: 'houseCount',
     value: count,
+  })
+}
+
+export async function getAppLanguage(): Promise<AppLanguage | undefined> {
+  const db = await dbPromise
+  const setting = await db.get(SETTINGS_STORE, 'language') as
+    | { key: string; value: unknown }
+    | undefined
+
+  return setting?.value === 'hy' ||
+    setting?.value === 'ru' ||
+    setting?.value === 'en'
+    ? setting.value
+    : undefined
+}
+
+export async function setAppLanguage(language: AppLanguage): Promise<void> {
+  const db = await dbPromise
+  await db.put(SETTINGS_STORE, {
+    key: 'language',
+    value: language,
   })
 }
 

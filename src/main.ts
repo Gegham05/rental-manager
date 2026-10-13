@@ -1,5 +1,11 @@
 import './style.css'
 import { hasBookingConflict } from './services/bookingService'
+import {
+  getLanguageLocale,
+  translateMessage,
+  translateText,
+  type AppLanguage,
+} from './services/i18n'
 import { convertReceiptImageToPdf } from './services/receiptPdfService'
 import type { Booking } from './models/Booking'
 import type { Receipt } from './models/Receipt'
@@ -14,14 +20,27 @@ import {
   deleteBooking,
   replaceAllBookings,
   getHouseCount,
+  getAppLanguage,
   getHouseNames,
   setHouseCount,
+  setAppLanguage,
   setHouseName,
   removeHouseAndBookings,
 } from './storage/bookingRepository'
 
 let configuredHouseCount = 0
 let configuredHouseNames: Record<number, string> = {}
+let selectedLanguage: AppLanguage = 'ru'
+
+const alert = (message: string) =>
+  window.alert(translateMessage(message, selectedLanguage))
+const confirm = (message: string) =>
+  window.confirm(translateMessage(message, selectedLanguage))
+const prompt = (message: string, defaultValue?: string) =>
+  window.prompt(
+    translateMessage(message, selectedLanguage),
+    defaultValue,
+  )
 
 function getHouseIds(): number[] {
   return Array.from(
@@ -31,7 +50,10 @@ function getHouseIds(): number[] {
 }
 
 function getHouseName(houseId: number): string {
-  return configuredHouseNames[houseId]?.trim() || `Дом ${houseId}`
+  return (
+    configuredHouseNames[houseId]?.trim() ||
+    `${translateText('Дом', selectedLanguage)} ${houseId}`
+  )
 }
 
 function escapeHtml(value: string): string {
@@ -54,7 +76,7 @@ function renderContactPhoneButton(phone: string): string {
       type="button"
       class="contact-phone-button"
       data-contact-phone="${escapedPhone}"
-      aria-label="Выбрать способ связи: ${escapedPhone}"
+      aria-label="${translateText('Выбрать способ связи:', selectedLanguage)} ${escapedPhone}"
     >
       ☎ ${escapedPhone}
     </button>
@@ -228,9 +250,20 @@ app.innerHTML = `
 </section>
 </main>
   <main class="app hidden-page" id="settingsPage">
-  <div class="search-header">
-    <p class="date">Приложение</p>
-    <h1>Настройки</h1>
+  <div class="settings-page-header">
+    <div class="search-header">
+      <p class="date">Приложение</p>
+      <div class="settings-title-row">
+        <h1>Настройки</h1>
+        <button
+          type="button"
+          class="language-button language-switcher"
+          id="languageToggle"
+          aria-label="Сменить язык"
+          title="Сменить язык"
+        ><svg viewBox="0 0 30 20" aria-hidden="true"><rect width="30" height="20" rx="2" fill="#fff"/><path fill="#0039a6" d="M0 6.67h30v6.66H0z"/><path fill="#d52b1e" d="M0 13.33h30v6.67H0z"/></svg></button>
+      </div>
+    </div>
   </div>
   <section class="backup-section">
   <h2>Дома</h2>
@@ -316,7 +349,7 @@ app.innerHTML = `
 
         <label>
           Дом
-          <select name="house" required></select>
+          <select name="house"></select>
         </label>
 
         <div class="rental-types">
@@ -342,9 +375,37 @@ app.innerHTML = `
 
         <div class="two-columns">
           <label>
+            Цена
+            <input
+              type="number"
+              name="price"
+              min="0"
+              placeholder="80000"
+              required
+            >
+          </label>
+
+          <label>
+            Предоплата
+            <input
+              type="number"
+              name="paid"
+              min="0"
+              value="0"
+            >
+          </label>
+        </div>
+
+        <div class="remaining">
+          Осталось:
+          <strong id="remainingAmount">0 ֏</strong>
+        </div>
+
+        <div class="two-columns">
+          <label>
             Заезд
             <span class="date-time-inputs">
-              <input type="date" data-date-for="start" required>
+              <input type="date" data-date-for="start">
               <input
                 type="text"
                 data-time-for="start"
@@ -352,7 +413,6 @@ app.innerHTML = `
                 maxlength="5"
                 placeholder="14:00"
                 aria-label="Время заезда"
-                required
               >
             </span>
             <input type="hidden" name="start">
@@ -361,7 +421,7 @@ app.innerHTML = `
           <label>
             Выезд
             <span class="date-time-inputs">
-              <input type="date" data-date-for="end" required>
+              <input type="date" data-date-for="end">
               <input
                 type="text"
                 data-time-for="end"
@@ -369,7 +429,6 @@ app.innerHTML = `
                 maxlength="5"
                 placeholder="11:00"
                 aria-label="Время выезда"
-                required
               >
             </span>
             <input type="hidden" name="end">
@@ -382,7 +441,6 @@ app.innerHTML = `
             type="text"
             name="guestName"
             placeholder="Например, Арман"
-            required
           >
         </label>
 
@@ -402,45 +460,14 @@ app.innerHTML = `
             name="guestCount"
             value="1"
             min="1"
-            required
           >
         </label>
-
-        <div class="two-columns">
-          <label>
-            Цена
-            <input
-              type="number"
-              name="price"
-              min="0"
-              placeholder="80000"
-              required
-            >
-          </label>
-
-          <label>
-            Предоплата
-            <input
-              type="number"
-              name="paid"
-              min="0"
-              value="0"
-              required
-            >
-          </label>
-        </div>
-
-        <div class="remaining">
-          Осталось:
-          <strong id="remainingAmount">0 ֏</strong>
-        </div>
 
         <label>
           Комментарий
           <textarea
             name="comment"
             rows="3"
-            placeholder="Необязательно"
           ></textarea>
         </label>
 
@@ -499,7 +526,6 @@ app.innerHTML = `
           <textarea
             name="comment"
             rows="3"
-            placeholder="Необязательно"
           ></textarea>
         </label>
 
@@ -570,6 +596,178 @@ app.innerHTML = `
     </div>
   </div>
 `
+
+const languageToggle =
+  document.querySelector<HTMLButtonElement>('#languageToggle')!
+const originalTextByNode =
+  new WeakMap<Text, { original: string; translated: string }>()
+const originalAttributesByElement =
+  new WeakMap<Element, Map<string, { original: string; translated: string }>>()
+
+function translateTextNode(node: Text, allowPhraseTranslation = false) {
+  const current = node.data
+  let record = originalTextByNode.get(node)
+  if (!record || current !== record.translated) {
+    record = { original: current, translated: current }
+    originalTextByNode.set(node, record)
+  }
+
+  const original = record.original
+  const trimmed = original.trim()
+  const translated = allowPhraseTranslation
+    ? translateMessage(trimmed, selectedLanguage)
+    : translateText(trimmed, selectedLanguage)
+
+  if (trimmed.length === 0) {
+    return
+  }
+
+  if (translated !== trimmed) {
+    const leadingWhitespace = original.match(/^\s*/)?.[0] ?? ''
+    const trailingWhitespace = original.match(/\s*$/)?.[0] ?? ''
+    record.translated = `${leadingWhitespace}${translated}${trailingWhitespace}`
+    if (node.data !== record.translated) {
+      node.data = record.translated
+    }
+  } else if (node.data !== original) {
+    record.translated = original
+    node.data = original
+  } else {
+    record.translated = original
+  }
+}
+
+function translateElement(element: Element) {
+  const attributes = ['placeholder', 'title', 'aria-label']
+  let originals = originalAttributesByElement.get(element)
+  if (!originals) {
+    originals = new Map<
+      string,
+      { original: string; translated: string }
+    >()
+    originalAttributesByElement.set(element, originals)
+  }
+
+  for (const attribute of attributes) {
+    if (!element.hasAttribute(attribute)) {
+      continue
+    }
+
+    const current = element.getAttribute(attribute)!
+    let record = originals.get(attribute)
+    if (!record || current !== record.translated) {
+      record = { original: current, translated: current }
+      originals.set(attribute, record)
+    }
+    const translated = translateText(record.original, selectedLanguage)
+    record.translated = translated
+
+    if (translated !== current) {
+      element.setAttribute(attribute, translated)
+    }
+  }
+}
+
+function translateDom(root: Node = app) {
+  if (root instanceof Text) {
+    if (
+      root.parentElement &&
+      !root.parentElement.closest(
+        '.guest-name, .booking-guest, .house-name, .contact-options-phone, .contact-phone-button, textarea, input',
+      )
+    ) {
+      translateTextNode(
+        root,
+        root.parentElement.closest(
+          '.booking-time, .guest-count, .booking-payment, .payment-due, .backup-status, .booking-dates, .day-booking-summary',
+        ) !== null,
+      )
+    }
+    return
+  }
+
+  if (!(root instanceof Element || root instanceof DocumentFragment)) {
+    return
+  }
+
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  let textNode = walker.nextNode()
+  while (textNode) {
+    const parent = textNode.parentElement
+    if (
+      parent &&
+      !parent.closest(
+        '.guest-name, .booking-guest, .house-name, .contact-options-phone, .contact-phone-button, textarea, input',
+      )
+    ) {
+      translateTextNode(
+        textNode as Text,
+        parent.closest(
+          '.booking-time, .guest-count, .booking-payment, .payment-due, .backup-status, .booking-dates, .day-booking-summary',
+        ) !== null,
+      )
+    }
+    textNode = walker.nextNode()
+  }
+
+  if (root instanceof Element) {
+    translateElement(root)
+    root.querySelectorAll('*').forEach(translateElement)
+  }
+}
+
+translateDom()
+
+function updateLanguageButtons() {
+  const languageOptions: Record<AppLanguage, { flag: string; name: string }> = {
+    hy: {
+      flag: '<svg viewBox="0 0 30 20" aria-hidden="true"><rect width="30" height="20" rx="2" fill="#f2a800"/><path fill="#0033a0" d="M0 0h30v13.33H0z"/><path fill="#d90012" d="M0 0h30v6.67H0z"/></svg>',
+      name: 'Հայերեն',
+    },
+    ru: {
+      flag: '<svg viewBox="0 0 30 20" aria-hidden="true"><rect width="30" height="20" rx="2" fill="#fff"/><path fill="#0039a6" d="M0 6.67h30v6.66H0z"/><path fill="#d52b1e" d="M0 13.33h30v6.67H0z"/></svg>',
+      name: 'Русский',
+    },
+    en: {
+      flag: '<svg viewBox="0 0 30 20" aria-hidden="true"><rect width="30" height="20" rx="2" fill="#fff"/><path stroke="#b22234" stroke-width="1.54" d="M0 .77h30M0 3.85h30M0 6.92h30M0 10h30M0 13.08h30M0 16.15h30M0 19.23h30"/><path fill="#3c3b6e" d="M0 0h13v10H0z"/><path fill="#fff" d="m2 1 .45 1.1 1.2.08-.92.77.3 1.17L2 3.47l-1.03.65.3-1.17-.92-.77 1.2-.08zM6.5 1l.45 1.1 1.2.08-.92.77.3 1.17-1.03-.65-1.03.65.3-1.17-.92-.77 1.2-.08zM11 1l.45 1.1 1.2.08-.92.77.3 1.17L11 3.47l-1.03.65.3-1.17-.92-.77 1.2-.08zM4.25 5l.45 1.1 1.2.08-.92.77.3 1.17-1.03-.65-1.03.65.3-1.17-.92-.77 1.2-.08zM8.75 5l.45 1.1 1.2.08-.92.77.3 1.17-1.03-.65-1.03.65.3-1.17-.92-.77 1.2-.08z"/></svg>',
+      name: 'English',
+    },
+  }
+  const current = languageOptions[selectedLanguage]
+  const nextLanguage: AppLanguage =
+    selectedLanguage === 'hy' ? 'ru' : selectedLanguage === 'ru' ? 'en' : 'hy'
+  const next = languageOptions[nextLanguage]
+
+  languageToggle.innerHTML = current.flag
+  languageToggle.setAttribute(
+    'aria-label',
+    `${current.name}. ${translateText('Переключить на', selectedLanguage)} ${next.name}`,
+  )
+  languageToggle.title =
+    `${current.name} · ${translateText('Переключить на', selectedLanguage)} ${next.name}`
+}
+
+async function changeLanguage(language: string) {
+  if (language !== 'hy' && language !== 'ru' && language !== 'en') {
+    throw new Error(`Unsupported interface language: ${language}`)
+  }
+
+  selectedLanguage = language
+  await setAppLanguage(language)
+  updateLanguageButtons()
+  translateDom()
+  renderTodayDate()
+  updateHouseSettings()
+  await refreshBookingViews()
+}
+
+languageToggle.addEventListener('click', () => {
+  const nextLanguage: AppLanguage =
+    selectedLanguage === 'hy' ? 'ru' : selectedLanguage === 'ru' ? 'en' : 'hy'
+  void changeLanguage(nextLanguage)
+})
+
+updateLanguageButtons()
 
   const contactOptionsModal =
     document.querySelector<HTMLDivElement>('#contactOptionsModal')!
@@ -657,6 +855,7 @@ app.innerHTML = `
     if (receipts.length === 0) {
       receiptList.innerHTML =
         '<p class="receipt-list-empty">Квитанций пока нет.</p>'
+      translateDom(receiptList)
       return
     }
 
@@ -674,7 +873,7 @@ app.innerHTML = `
               download="${escapeHtml(receipt.fileName)}"
             >
               ${escapeHtml(receipt.fileName)}
-              <span>${new Date(receipt.createdAt).toLocaleDateString('ru-RU')}</span>
+              <span>${new Date(receipt.createdAt).toLocaleDateString(getLanguageLocale(selectedLanguage))}</span>
             </a>
             <button
               type="button"
@@ -688,6 +887,7 @@ app.innerHTML = `
         `
       })
       .join('')
+    translateDom(receiptList)
   }
 
   async function openReceiptManager(bookingId: string) {
@@ -704,7 +904,7 @@ app.innerHTML = `
 
     activeReceiptBookingId = bookingId
     receiptModalTitle.textContent =
-      `Квитанции · ${getHouseName(booking.houseId)}`
+      `${translateText('Квитанции', selectedLanguage)} · ${getHouseName(booking.houseId)}`
     await renderReceiptList()
     receiptModal.classList.remove('hidden')
   }
@@ -842,7 +1042,7 @@ const todayDate =
 function renderTodayDate() {
   const now = new Date()
 
-  todayDate.textContent = now.toLocaleDateString('ru-RU', {
+  todayDate.textContent = now.toLocaleDateString(getLanguageLocale(selectedLanguage), {
     day: 'numeric',
     month: 'long',
     year: 'numeric',
@@ -983,7 +1183,8 @@ function updateHouseSettings() {
   const selectedRemoveHouseId = Number(houseToRemoveSelect.value) || 1
   const selectedRenameHouseId = Number(houseToRenameSelect.value) || 1
 
-  countLabel.textContent = `Количество домов: ${configuredHouseCount}`
+  countLabel.textContent =
+    `${translateText('Количество домов:', selectedLanguage)} ${configuredHouseCount}`
   const houseOptions = getHouseIds()
     .map(
       (houseId) =>
@@ -1001,6 +1202,9 @@ function updateHouseSettings() {
   houseNameInput.value = getHouseName(Number(houseToRenameSelect.value))
   houseToRemoveSelect.disabled = configuredHouseCount <= 1
   removeHouseButton.disabled = configuredHouseCount <= 1
+  translateDom(countLabel)
+  translateDom(houseToRemoveSelect)
+  translateDom(houseToRenameSelect)
 }
 
 function updateRemaining() {
@@ -1010,7 +1214,7 @@ function updateRemaining() {
   const remaining = Math.max(0, price - paid)
 
   remainingAmount.textContent =
-    `${remaining.toLocaleString('ru-RU')} ֏`
+    `${remaining.toLocaleString(getLanguageLocale(selectedLanguage))} ֏`
 }
 
 function formatDateTimeLocal(date: Date): string {
@@ -1413,21 +1617,34 @@ async function renderHouses() {
 
   const bookings = await getAllBookings()
 
-  const now = new Date()
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const tomorrow = new Date(today)
+  tomorrow.setDate(tomorrow.getDate() + 1)
 
   housesContainer.innerHTML = ''
 
   for (const houseId of getHouseIds()) {
-    const currentBooking = bookings.find((booking) => {
-      if (booking.houseId !== houseId) {
-        return false
-      }
+    const todaysBookings = bookings
+      .filter(
+        (booking) =>
+          booking.houseId === houseId &&
+          new Date(booking.startAt) < tomorrow &&
+          new Date(booking.endAt) >= today,
+      )
+      .sort((a, b) => {
+        const aConfirmed = (a.status ?? 'confirmed') === 'confirmed'
+        const bConfirmed = (b.status ?? 'confirmed') === 'confirmed'
 
-      const start = new Date(booking.startAt)
-      const end = new Date(booking.endAt)
+        if (aConfirmed !== bConfirmed) {
+          return aConfirmed ? -1 : 1
+        }
 
-      return start <= now && end > now
-    })
+        return new Date(a.startAt).getTime() - new Date(b.startAt).getTime()
+      })
+    const currentBooking = todaysBookings[0]
+    const isConfirmed =
+      currentBooking && (currentBooking.status ?? 'confirmed') === 'confirmed'
 
     const house = document.createElement('article')
     house.className = 'house'
@@ -1439,12 +1656,15 @@ async function renderHouses() {
     if (!currentBooking) {
       house.setAttribute(
         'aria-label',
-        `${houseName} свободен. Создать бронь`,
+        translateMessage(
+          `${houseName} свободен. Создать бронь`,
+          selectedLanguage,
+        ),
       )
       house.innerHTML = `
-        <div>
+        <div class="house-top">
           <span class="house-name">${escapeHtml(houseName)}</span>
-          <span class="status free">● Свободен</span>
+          <span class="status free">● Свободен сегодня</span>
         </div>
       `
     } else {
@@ -1457,7 +1677,12 @@ async function renderHouses() {
       house.dataset.bookingId = currentBooking.id
       house.setAttribute(
         'aria-label',
-        `${houseName} занят. Открыть бронь: ${currentBooking.guestName}`,
+        translateMessage(
+          isConfirmed
+            ? `${houseName} занят сегодня. Открыть бронь: ${currentBooking.guestName}`
+            : `${houseName}: предварительная бронь сегодня. Можно добавить бронь`,
+          selectedLanguage,
+        ),
       )
 
       house.innerHTML = `
@@ -1468,8 +1693,8 @@ async function renderHouses() {
               ${escapeHtml(houseName)}
             </span>
 
-            <span class="status busy">
-              ● Занят
+            <span class="status ${isConfirmed ? 'busy' : 'pending'}">
+              ● ${isConfirmed ? 'Занят сегодня' : 'Предварительная бронь сегодня'}
             </span>
           </div>
 
@@ -1478,11 +1703,18 @@ async function renderHouses() {
           </strong>
 
           <span class="booking-time">
-            до ${end.toLocaleDateString('ru-RU', {
+            ${new Date(currentBooking.startAt).toLocaleDateString(getLanguageLocale(selectedLanguage), {
               day: 'numeric',
               month: 'long',
             })},
-            ${end.toLocaleTimeString('ru-RU', {
+            ${new Date(currentBooking.startAt).toLocaleTimeString(getLanguageLocale(selectedLanguage), {
+              hour: '2-digit',
+              minute: '2-digit',
+            })} — ${end.toLocaleDateString(getLanguageLocale(selectedLanguage), {
+              day: 'numeric',
+              month: 'long',
+            })},
+            ${end.toLocaleTimeString(getLanguageLocale(selectedLanguage), {
               hour: '2-digit',
               minute: '2-digit',
             })}
@@ -1495,21 +1727,28 @@ async function renderHouses() {
 
           <div class="money">
             <span>
-              ${currentBooking.totalPrice.toLocaleString('ru-RU')} ֏
+              ${currentBooking.totalPrice.toLocaleString(getLanguageLocale(selectedLanguage))} ֏
             </span>
 
             <span>
               Осталось:
               <strong>
-                ${remaining.toLocaleString('ru-RU')} ֏
+                ${remaining.toLocaleString(getLanguageLocale(selectedLanguage))} ֏
               </strong>
             </span>
           </div>
+
+          ${
+            isConfirmed
+              ? ''
+              : `<button type="button" class="day-add-booking house-add-booking" data-add-today="${houseId}">+ Добавить бронь</button>`
+          }
 
         </div>
       `
     }
 
+    translateDom(house)
     housesContainer.appendChild(house)
   }
 }
@@ -1519,6 +1758,10 @@ const housesContainer =
 
 function handleHouseActivation(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) {
+    return
+  }
+
+  if (target.closest('[data-add-today]')) {
     return
   }
 
@@ -1543,6 +1786,17 @@ function handleHouseActivation(target: EventTarget | null) {
 }
 
 housesContainer.addEventListener('click', (event) => {
+  if (!(event.target instanceof HTMLElement)) {
+    return
+  }
+
+  const addButton = event.target.closest<HTMLButtonElement>('[data-add-today]')
+  if (addButton) {
+    event.stopPropagation()
+    openModal(new Date(), Number(addButton.dataset.addToday))
+    return
+  }
+
   handleHouseActivation(event.target)
 })
 
@@ -1551,6 +1805,13 @@ housesContainer.addEventListener('keydown', (event) => {
     event instanceof KeyboardEvent &&
     (event.key === 'Enter' || event.key === ' ')
   ) {
+    if (
+      event.target instanceof HTMLElement &&
+      event.target.closest('[data-add-today]')
+    ) {
+      return
+    }
+
     event.preventDefault()
     handleHouseActivation(event.target)
   }
@@ -1586,10 +1847,21 @@ async function renderUpcomingBookings(
       )
     }
 
-    return (
-      new Date(a.startAt).getTime() -
-      new Date(b.startAt).getTime()
-    )
+    const sameStay =
+      a.houseId === b.houseId &&
+      a.startAt.slice(0, 10) === b.startAt.slice(0, 10)
+
+    if (sameStay) {
+      const statusOrder =
+        Number((b.status ?? 'confirmed') === 'confirmed') -
+        Number((a.status ?? 'confirmed') === 'confirmed')
+
+      if (statusOrder !== 0) {
+        return statusOrder
+      }
+    }
+
+    return new Date(a.startAt).getTime() - new Date(b.startAt).getTime()
   })
 
   if (upcomingBookings.length === 0) {
@@ -1604,6 +1876,7 @@ async function renderUpcomingBookings(
       </div>
     `
 
+    translateDom(container)
     return
   }
 
@@ -1615,22 +1888,22 @@ async function renderUpcomingBookings(
       const remaining =
         booking.totalPrice - booking.paidAmount
 
-      const startDate = start.toLocaleDateString('ru-RU', {
+      const startDate = start.toLocaleDateString(getLanguageLocale(selectedLanguage), {
         day: 'numeric',
         month: 'long',
       })
 
-      const startTime = start.toLocaleTimeString('ru-RU', {
+      const startTime = start.toLocaleTimeString(getLanguageLocale(selectedLanguage), {
         hour: '2-digit',
         minute: '2-digit',
       })
 
-      const endDate = end.toLocaleDateString('ru-RU', {
+      const endDate = end.toLocaleDateString(getLanguageLocale(selectedLanguage), {
         day: 'numeric',
         month: 'short',
       })
 
-      const endTime = end.toLocaleTimeString('ru-RU', {
+      const endTime = end.toLocaleTimeString(getLanguageLocale(selectedLanguage), {
         hour: '2-digit',
         minute: '2-digit',
       })
@@ -1679,14 +1952,14 @@ async function renderUpcomingBookings(
 
           <div class="booking-payment">
             <span>
-              ${booking.totalPrice.toLocaleString('ru-RU')} ֏
+              ${booking.totalPrice.toLocaleString(getLanguageLocale(selectedLanguage))} ֏
             </span>
 
             ${
               remaining > 0
                 ? `
                   <span class="payment-due">
-                    Осталось ${remaining.toLocaleString('ru-RU')} ֏
+                    Осталось ${remaining.toLocaleString(getLanguageLocale(selectedLanguage))} ֏
                   </span>
                 `
                 : `
@@ -1700,6 +1973,7 @@ async function renderUpcomingBookings(
       `
     })
     .join('')
+  translateDom(container)
 }
 
 const upcomingBookingsTab =
@@ -1729,11 +2003,7 @@ async function renderSearchResults(query: string) {
   const normalizedQuery = query.trim().toLowerCase()
 
   if (!normalizedQuery) {
-    container.innerHTML = `
-      <div class="empty-bookings">
-        Введите имя или номер телефона
-      </div>
-    `
+    container.innerHTML = ''
     return
   }
 
@@ -1780,6 +2050,7 @@ async function renderSearchResults(query: string) {
         Ничего не найдено
       </div>
     `
+    translateDom(container)
     return
   }
 
@@ -1814,7 +2085,7 @@ async function renderSearchResults(query: string) {
           </strong>
 
           <div class="booking-dates">
-            ${start.toLocaleString('ru-RU', {
+            ${start.toLocaleString(getLanguageLocale(selectedLanguage), {
               day: 'numeric',
               month: 'long',
               year: 'numeric',
@@ -1831,13 +2102,13 @@ async function renderSearchResults(query: string) {
 
           <div class="booking-payment">
             <span>
-              ${booking.totalPrice.toLocaleString('ru-RU')} ֏
+              ${booking.totalPrice.toLocaleString(getLanguageLocale(selectedLanguage))} ֏
             </span>
 
             <span>
               ${
                 remaining > 0
-                  ? `Осталось ${remaining.toLocaleString('ru-RU')} ֏`
+                  ? `Осталось ${remaining.toLocaleString(getLanguageLocale(selectedLanguage))} ֏`
                   : 'Оплачено'
               }
             </span>
@@ -1846,6 +2117,7 @@ async function renderSearchResults(query: string) {
       `
     })
     .join('')
+  translateDom(container)
 }
 
 const bookingSearch =
@@ -1902,6 +2174,7 @@ function renderBackupStatus() {
   if (!lastBackupAt) {
     backupStatus.textContent =
       'Последняя копия: ещё не создавалась'
+    translateDom(backupStatus)
     return
   }
 
@@ -1927,6 +2200,7 @@ function renderBackupStatus() {
     backupStatus.classList.remove('backup-warning')
   }
 }
+translateDom(backupStatus)
 }
 
 renderBackupStatus()
@@ -2133,7 +2407,10 @@ async function renderCalendar() {
   viewToggle.textContent = viewNames[calendarView]
   viewToggle.setAttribute(
     'aria-label',
-    `Текущий вид: ${viewNames[calendarView]}. Переключить на ${viewNames[nextView]}`,
+    translateMessage(
+      `Текущий вид: ${viewNames[calendarView]}. Переключить на ${viewNames[nextView]}`,
+      selectedLanguage,
+    ),
   )
 
   const firstOfMonth = new Date(year, month, 1)
@@ -2157,7 +2434,7 @@ async function renderCalendar() {
   if (calendarView === 'month') {
     firstVisibleDate = firstGridDate
     lastVisibleDate = lastGridDate
-    monthLabel.textContent = firstOfMonth.toLocaleDateString('ru-RU', {
+    monthLabel.textContent = firstOfMonth.toLocaleDateString(getLanguageLocale(selectedLanguage), {
       month: 'long',
       year: 'numeric',
     })
@@ -2165,8 +2442,8 @@ async function renderCalendar() {
     firstVisibleDate = weekStart
     lastVisibleDate = weekEnd
     monthLabel.textContent =
-      `${weekStart.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })} — ` +
-      weekEnd.toLocaleDateString('ru-RU', {
+      `${weekStart.toLocaleDateString(getLanguageLocale(selectedLanguage), { day: 'numeric', month: 'short' })} — ` +
+      weekEnd.toLocaleDateString(getLanguageLocale(selectedLanguage), {
         day: 'numeric',
         month: 'short',
         year: 'numeric',
@@ -2174,7 +2451,7 @@ async function renderCalendar() {
   } else {
     firstVisibleDate = new Date(calendarDate)
     lastVisibleDate = new Date(calendarDate)
-    monthLabel.textContent = calendarDate.toLocaleDateString('ru-RU', {
+    monthLabel.textContent = calendarDate.toLocaleDateString(getLanguageLocale(selectedLanguage), {
       day: 'numeric',
       month: 'long',
       year: 'numeric',
@@ -2209,7 +2486,7 @@ async function renderCalendar() {
         )
 
         if (houseBookings.length === 0) {
-          return `<span class="month-house free">${escapeHtml(getHouseName(houseId))} свободен</span>`
+          return `<span class="month-house free">${escapeHtml(getHouseName(houseId))} ${translateText('Свободен', selectedLanguage)}</span>`
         }
 
         const hasConfirmed = houseBookings.some(
@@ -2231,12 +2508,12 @@ async function renderCalendar() {
 
     const isCurrentMonth = date.getMonth() === month
     const isToday = dateKey(date) === dateKey(new Date())
-    const dateTitle = date.toLocaleDateString('ru-RU', {
+    const dateTitle = date.toLocaleDateString(getLanguageLocale(selectedLanguage), {
       day: 'numeric',
       month: 'long',
       year: 'numeric',
     })
-    const weekdayLabel = date.toLocaleDateString('ru-RU', {
+    const weekdayLabel = date.toLocaleDateString(getLanguageLocale(selectedLanguage), {
       weekday: 'short',
     })
     const isSelectedDate = dateKey(date) === dateKey(calendarDate)
@@ -2246,7 +2523,7 @@ async function renderCalendar() {
         type="button"
         class="month-day${calendarView === 'week' ? ' week-day' : ''}${calendarView === 'day' ? ' single-day' : ''}${calendarView === 'month' && !isCurrentMonth ? ' outside-month' : ''}${isToday ? ' today' : ''}${isSelectedDate ? ' selected-calendar-day' : ''}"
         data-calendar-date="${dateKey(date)}"
-        aria-label="${dateTitle}, броней: ${dayBookings.length}"
+        aria-label="${dateTitle}, ${translateText('броней:', selectedLanguage)} ${dayBookings.length}"
       >
         ${calendarView === 'month' ? '' : `<span class="calendar-weekday-label">${weekdayLabel}</span>`}
         <span class="month-day-number">${calendarView === 'month' ? date.getDate() : dateTitle}</span>
@@ -2261,6 +2538,8 @@ async function renderCalendar() {
       ${daysHtml}
     </div>
   `
+  translateDom(calendar)
+  translateDom(viewToggle)
 }
 
 let selectedCalendarDate: Date | null = null
@@ -2301,7 +2580,7 @@ async function renderSelectedDayBookings() {
   const nextDay = new Date(dayStart)
   nextDay.setDate(nextDay.getDate() + 1)
 
-  selectedDayTitle.textContent = dayStart.toLocaleDateString('ru-RU', {
+  selectedDayTitle.textContent = dayStart.toLocaleDateString(getLanguageLocale(selectedLanguage), {
     day: 'numeric',
     month: 'long',
     year: 'numeric',
@@ -2316,12 +2595,13 @@ async function renderSelectedDayBookings() {
             bookingOccupiesCalendarDay(booking, dayStart, nextDay),
         )
         .sort((a, b) => {
-          const aPending = (a.status ?? 'confirmed') === 'pending'
-          const bPending = (b.status ?? 'confirmed') === 'pending'
-          if (aPending !== bPending) {
-            return aPending ? -1 : 1
+          const aConfirmed = (a.status ?? 'confirmed') === 'confirmed'
+          const bConfirmed = (b.status ?? 'confirmed') === 'confirmed'
+          if (aConfirmed !== bConfirmed) {
+            return aConfirmed ? -1 : 1
           }
-          if (aPending) {
+
+          if (!aConfirmed) {
             return b.totalPrice - a.totalPrice
           }
           return new Date(a.startAt).getTime() - new Date(b.startAt).getTime()
@@ -2349,13 +2629,13 @@ async function renderSelectedDayBookings() {
                     tabindex="0"
                   >
                     <strong>${booking.guestName}</strong>
-                    <span>${status} · ${booking.totalPrice.toLocaleString('ru-RU')} ֏</span>
+                    <span>${translateText(status, selectedLanguage)} · ${booking.totalPrice.toLocaleString(getLanguageLocale(selectedLanguage))} ֏</span>
                     <span>${booking.rentalType === 'overnight' ? 'С ночёвкой' : 'Без ночёвки'}</span>
-                    <span>${start.toLocaleString('ru-RU')} — ${end.toLocaleString('ru-RU')}</span>
-                    <span>Гостей: ${booking.guestCount} · Оплачено: ${booking.paidAmount.toLocaleString('ru-RU')} ֏ · Осталось: ${remaining.toLocaleString('ru-RU')} ֏</span>
+                    <span>${start.toLocaleString(getLanguageLocale(selectedLanguage))} — ${end.toLocaleString(getLanguageLocale(selectedLanguage))}</span>
+                    <span class="day-booking-summary">Гостей: ${booking.guestCount} · Оплачено: ${booking.paidAmount.toLocaleString(getLanguageLocale(selectedLanguage))} ֏ · Осталось: ${remaining.toLocaleString(getLanguageLocale(selectedLanguage))} ֏</span>
                     ${booking.guestPhone ? renderContactPhoneButton(booking.guestPhone) : ''}
                     ${renderReceiptButton(booking)}
-                    ${booking.comment ? `<span>Комментарий: ${booking.comment}</span>` : ''}
+                    ${booking.comment ? `<span>${translateText('Комментарий', selectedLanguage)}: ${booking.comment}</span>` : ''}
                   </article>
                 `
               })
@@ -2378,6 +2658,7 @@ async function renderSelectedDayBookings() {
       `
     })
     .join('')
+  translateDom(selectedDayBookings)
 }
 
 document
@@ -2615,6 +2896,14 @@ removeHouseButton.addEventListener('click', async () => {
 })
 
 async function initializeHouseConfiguration() {
+  const savedLanguage = await getAppLanguage()
+  if (savedLanguage) {
+    selectedLanguage = savedLanguage
+  }
+  updateLanguageButtons()
+  translateDom()
+  renderTodayDate()
+
   const savedHouseCount = await getHouseCount()
   configuredHouseNames = await getHouseNames()
 
@@ -2853,7 +3142,7 @@ bookingDetails.addEventListener('click', async (event) => {
   }
 
   const input = prompt(
-    `Осталось: ${remaining.toLocaleString('ru-RU')} ֏\nВведите сумму оплаты:`,
+    `Осталось: ${remaining.toLocaleString(getLanguageLocale(selectedLanguage))} ֏\nВведите сумму оплаты:`,
   )
 
   if (input === null) {
@@ -2957,14 +3246,14 @@ detailsBackdrop.addEventListener(
       <div class="details-row">
         <span>Заезд</span>
         <strong>
-          ${start.toLocaleString('ru-RU')}
+          ${start.toLocaleString(getLanguageLocale(selectedLanguage))}
         </strong>
       </div>
 
       <div class="details-row">
         <span>Выезд</span>
         <strong>
-          ${end.toLocaleString('ru-RU')}
+          ${end.toLocaleString(getLanguageLocale(selectedLanguage))}
         </strong>
       </div>
 
@@ -2977,21 +3266,21 @@ detailsBackdrop.addEventListener(
         <div class="details-row">
           <span>Цена</span>
           <strong>
-            ${booking.totalPrice.toLocaleString('ru-RU')} ֏
+            ${booking.totalPrice.toLocaleString(getLanguageLocale(selectedLanguage))} ֏
           </strong>
         </div>
 
         <div class="details-row">
           <span>Предоплата</span>
           <strong>
-            ${booking.paidAmount.toLocaleString('ru-RU')} ֏
+            ${booking.paidAmount.toLocaleString(getLanguageLocale(selectedLanguage))} ֏
           </strong>
         </div>
 
         <div class="details-row remaining-row">
           <span>Осталось</span>
           <strong>
-            ${remaining.toLocaleString('ru-RU')} ֏
+            ${remaining.toLocaleString(getLanguageLocale(selectedLanguage))} ֏
           </strong>
         </div>
       </div>
@@ -3046,11 +3335,25 @@ detailsBackdrop.addEventListener(
     </div>
   `
 
+  translateDom(details)
   modal.classList.remove('hidden')
 }
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault()
+
+  if (!startDateInput.value) {
+    startDateInput.value = startInput.value.slice(0, 10)
+  }
+  if (!startTimeInput.value) {
+    startTimeInput.value = startInput.value.split('T')[1] ?? ''
+  }
+  if (!endDateInput.value) {
+    endDateInput.value = endInput.value.slice(0, 10)
+  }
+  if (!endTimeInput.value) {
+    endTimeInput.value = endInput.value.split('T')[1] ?? ''
+  }
 
   if (
     !updateHiddenDateTime(startInput, startDateInput, startTimeInput) ||
@@ -3071,6 +3374,13 @@ form.addEventListener('submit', async (event) => {
       : 'confirmed'
 
   const formData = new FormData(form)
+  const priceValue = String(formData.get('price') ?? '').trim()
+  const totalPrice = Number(priceValue)
+
+  if (!priceValue || !Number.isFinite(totalPrice) || totalPrice < 0) {
+    alert('Укажите корректную цену бронирования.')
+    return
+  }
 
   const now = new Date().toISOString()
 
@@ -3084,11 +3394,11 @@ form.addEventListener('submit', async (event) => {
     startAt: String(formData.get('start')),
     endAt: String(formData.get('end')),
 
-    guestName: String(formData.get('guestName')),
+    guestName: String(formData.get('guestName') ?? '').trim() || 'Без имени',
     guestPhone: String(formData.get('phone')),
-    guestCount: Number(formData.get('guestCount')),
+    guestCount: Number(formData.get('guestCount')) || 1,
 
-    totalPrice: Number(formData.get('price')),
+    totalPrice,
     paidAmount: Number(formData.get('paid')),
 
     comment: String(formData.get('comment')),

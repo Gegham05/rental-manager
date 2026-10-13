@@ -337,8 +337,17 @@ textarea {
   color: #d70015;
 }
 
+.status.pending {
+  color: #b76e00;
+}
+
 .booking-info {
   display: grid;
+}
+
+.house-add-booking {
+  justify-self: start;
+  margin-top: 12px;
 }
 
 .guest-name {
@@ -1092,6 +1101,72 @@ body {
   background: white;
   border-radius: 18px;
   border: 1px solid #eeeeee;
+}
+
+.settings-page-header {
+  display: block;
+}
+
+.settings-page-header .search-header {
+  width: 100%;
+}
+
+.settings-title-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  align-items: center;
+  column-gap: 12px;
+}
+
+.settings-title-row h1 {
+  grid-column: 1;
+  grid-row: 1;
+  width: max-content;
+  max-width: 100%;
+}
+
+.language-switcher {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  width: 32px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.language-button {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 21px;
+  cursor: pointer;
+}
+
+.language-button svg {
+  display: block;
+  width: 28px;
+  height: 19px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.language-button:focus-visible {
+  outline: 2px solid #1d1d1f;
+  outline-offset: 2px;
+}
+
+.language-button:active {
+  transform: scale(0.94);
 }
 
 .backup-section h2 {
