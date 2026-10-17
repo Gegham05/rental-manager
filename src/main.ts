@@ -221,11 +221,36 @@ app.innerHTML = `
     autocomplete="off"
   />
 
-  <div id="searchResults" class="search-results">
-    <div class="empty-bookings">
-      Введите имя, номер телефона или дату
-    </div>
+  <div class="search-filters">
+    <label>
+      Дом
+      <select id="searchHouseFilter">
+        <option value="all">Все дома</option>
+      </select>
+    </label>
+    <label>
+      Статус
+      <select id="searchStatusFilter">
+        <option value="all">Все статусы</option>
+        <option value="confirmed">Подтверждённые</option>
+        <option value="pending">Предварительные</option>
+        <option value="expired">Истёкшие</option>
+      </select>
+    </label>
+    <label>
+      С даты
+      <input type="date" id="searchDateFrom">
+    </label>
+    <label>
+      По дату
+      <input type="date" id="searchDateTo">
+    </label>
+    <button type="button" class="search-clear-button" id="clearSearchFilters">
+      Сбросить фильтры
+    </button>
   </div>
+  <div id="searchResults" class="search-results"></div>
+  <div id="searchResults" class="search-results"></div>
   <section class="backup-section">
   <h2>Резервная копия</h2>
   <p>
@@ -758,6 +783,7 @@ async function changeLanguage(language: string) {
   translateDom()
   renderTodayDate()
   updateHouseSettings()
+  renderSearchHouseOptions()
   await refreshBookingViews()
 }
 
@@ -2001,43 +2027,105 @@ async function renderSearchResults(query: string) {
     document.querySelector<HTMLDivElement>('#searchResults')!
 
   const normalizedQuery = query.trim().toLowerCase()
+  const selectedHouseId = searchHouseFilter.value
+  const selectedStatus = searchStatusFilter.value
+  const dateFromValue = searchDateFrom.value
+  const dateToValue = searchDateTo.value
+  const hasFilters =
+    normalizedQuery.length > 0 ||
+    selectedHouseId !== 'all' ||
+    selectedStatus !== 'all' ||
+    dateFromValue.length > 0 ||
+    dateToValue.length > 0
 
-  if (!normalizedQuery) {
-    container.innerHTML = ''
+  if (!hasFilters) {
+    container.innerHTML = `
+      <div class="empty-bookings">
+        Введите запрос или выберите фильтр
+      </div>
+    `
+    translateDom(container)
     return
   }
 
   const bookings = await getAllBookings()
+  const rangeStart = dateFromValue
+    ? new Date(`${dateFromValue}T00:00:00`)
+    : undefined
+  const rangeEnd = dateToValue
+    ? new Date(`${dateToValue}T23:59:59.999`)
+    : undefined
+
+  if (rangeStart && rangeEnd && rangeStart > rangeEnd) {
+    container.innerHTML = `
+      <div class="empty-bookings">
+        Дата окончания не может быть раньше даты начала
+      </div>
+    `
+    translateDom(container)
+    return
+  }
 
   const results = bookings
-  .filter((booking) => {
-  const name = booking.guestName.toLowerCase()
-  const phone = booking.guestPhone.toLowerCase()
+    .filter((booking) => {
+      if (
+        selectedHouseId !== 'all' &&
+        booking.houseId !== Number(selectedHouseId)
+      ) {
+        return false
+      }
 
-  const start = new Date(booking.startAt)
+      if (
+        selectedStatus !== 'all' &&
+        (booking.status ?? 'confirmed') !== selectedStatus
+      ) {
+        return false
+      }
 
-  const day = String(start.getDate()).padStart(2, '0')
-  const month = String(start.getMonth() + 1).padStart(2, '0')
+      const bookingStart = new Date(booking.startAt)
+      const bookingEnd = new Date(booking.endAt)
+      if (rangeStart && bookingEnd < rangeStart) {
+        return false
+      }
+      if (rangeEnd && bookingStart > rangeEnd) {
+        return false
+      }
 
-  const bookingDate = `${day}.${month}`
+      if (!normalizedQuery) {
+        return true
+      }
 
-  const normalizedDateQuery = normalizedQuery
-    .replace('/', '.')
-    .split('.')
-    .map((part) => part.padStart(2, '0'))
-    .join('.')
+      const name = booking.guestName.toLowerCase()
+      const phone = booking.guestPhone.toLowerCase()
+      const start = new Date(booking.startAt)
+      const end = new Date(booking.endAt)
 
-  const matchesDate =
-    normalizedQuery === String(start.getDate()) ||
-    normalizedQuery === day ||
-    bookingDate === normalizedDateQuery
+      const dateKeys = [start, end].map((date) => {
+        const day = String(date.getDate()).padStart(2, '0')
+        const month = String(date.getMonth() + 1).padStart(2, '0')
+        return {
+          day,
+          date: `${day}.${month}`,
+        }
+      })
+      const normalizedDateQuery = normalizedQuery
+        .replace('/', '.')
+        .split('.')
+        .map((part) => part.padStart(2, '0'))
+        .join('.')
+      const matchesDate = dateKeys.some(
+        ({ day, date }) =>
+          normalizedQuery === String(Number(day)) ||
+          normalizedQuery === day ||
+          date === normalizedDateQuery,
+      )
 
-  return (
-    name.includes(normalizedQuery) ||
-    phone.includes(normalizedQuery) ||
-    matchesDate
-  )
-})
+      return (
+        name.includes(normalizedQuery) ||
+        phone.includes(normalizedQuery) ||
+        matchesDate
+      )
+    })
     .sort(
       (a, b) =>
         new Date(b.startAt).getTime() -
@@ -2071,6 +2159,22 @@ async function renderSearchResults(query: string) {
             </span>
 
             <div class="booking-card-actions">
+              <span class="booking-status ${
+                booking.status === 'pending'
+                  ? 'pending'
+                  : booking.status === 'expired'
+                    ? 'expired'
+                    : 'confirmed'
+              }">
+                ${translateText(
+                  booking.status === 'pending'
+                    ? 'Предварительная'
+                    : booking.status === 'expired'
+                      ? 'Истёкшая'
+                      : 'Подтверждённая',
+                  selectedLanguage,
+                )}
+              </span>
               <span class="booking-type">
                 ${booking.rentalType === 'overnight'
                   ? 'С ночёвкой'
@@ -2081,7 +2185,7 @@ async function renderSearchResults(query: string) {
           </div>
 
           <strong class="booking-guest">
-            ${booking.guestName}
+            ${escapeHtml(booking.guestName)}
           </strong>
 
           <div class="booking-dates">
@@ -2123,8 +2227,77 @@ async function renderSearchResults(query: string) {
 const bookingSearch =
   document.querySelector<HTMLInputElement>('#bookingSearch')!
 
+const searchHouseFilter =
+  document.querySelector<HTMLSelectElement>('#searchHouseFilter')!
+const searchStatusFilter =
+  document.querySelector<HTMLSelectElement>('#searchStatusFilter')!
+const searchDateFrom =
+  document.querySelector<HTMLInputElement>('#searchDateFrom')!
+const searchDateTo =
+  document.querySelector<HTMLInputElement>('#searchDateTo')!
+const clearSearchFiltersButton =
+  document.querySelector<HTMLButtonElement>('#clearSearchFilters')!
+
+function renderSearchHouseOptions() {
+  const selectedHouseId = searchHouseFilter.value
+  searchHouseFilter.innerHTML = `
+    <option value="all">${translateText('Все дома', selectedLanguage)}</option>
+    ${getHouseIds()
+      .map(
+        (houseId) =>
+          `<option value="${houseId}">${escapeHtml(getHouseName(houseId))}</option>`,
+      )
+      .join('')}
+  `
+
+  if (
+    selectedHouseId === 'all' ||
+    getHouseIds().includes(Number(selectedHouseId))
+  ) {
+    searchHouseFilter.value = selectedHouseId || 'all'
+  } else {
+    searchHouseFilter.value = 'all'
+  }
+}
+
 bookingSearch.addEventListener('input', () => {
   renderSearchResults(bookingSearch.value)
+})
+
+for (const filter of [
+  searchHouseFilter,
+  searchStatusFilter,
+  searchDateFrom,
+  searchDateTo,
+]) {
+  filter.addEventListener('change', () => {
+    if (filter === searchDateFrom) {
+      if (searchDateFrom.value) {
+        searchDateTo.min = searchDateFrom.value
+      } else {
+        searchDateTo.removeAttribute('min')
+      }
+    }
+    if (filter === searchDateTo) {
+      if (searchDateTo.value) {
+        searchDateFrom.max = searchDateTo.value
+      } else {
+        searchDateFrom.removeAttribute('max')
+      }
+    }
+    renderSearchResults(bookingSearch.value)
+  })
+}
+
+clearSearchFiltersButton.addEventListener('click', () => {
+  bookingSearch.value = ''
+  searchHouseFilter.value = 'all'
+  searchStatusFilter.value = 'all'
+  searchDateFrom.value = ''
+  searchDateTo.value = ''
+  searchDateFrom.removeAttribute('max')
+  searchDateTo.removeAttribute('min')
+  renderSearchResults('')
 })
 
 async function refreshBookingViews() {
@@ -2338,6 +2511,7 @@ backupFileInput.addEventListener('change', async () => {
       configuredHouseCount = importedHouseCount
       await setHouseCount(configuredHouseCount)
       renderHouseOptions()
+      renderSearchHouseOptions()
       updateHouseSettings()
     }
 
@@ -2817,6 +2991,7 @@ saveHouseNameButton.addEventListener('click', async () => {
   configuredHouseNames[houseId] = name
   updateHouseSettings()
   renderHouseOptions(Number(houseSelect.value))
+  renderSearchHouseOptions()
   await refreshBookingViews()
 })
 
@@ -2834,6 +3009,7 @@ houseSetupForm.addEventListener('submit', async (event) => {
   await setHouseCount(houseCount)
   configuredHouseCount = houseCount
   renderHouseOptions()
+  renderSearchHouseOptions()
   updateHouseSettings()
   houseSetupModal.classList.add('hidden')
   await refreshBookingViews()
@@ -2849,6 +3025,7 @@ addHouseButton.addEventListener('click', async () => {
   await setHouseCount(newHouseCount)
   configuredHouseCount = newHouseCount
   renderHouseOptions(configuredHouseCount)
+  renderSearchHouseOptions()
   updateHouseSettings()
   await refreshBookingViews()
 })
@@ -2891,6 +3068,7 @@ removeHouseButton.addEventListener('click', async () => {
   configuredHouseCount = newHouseCount
   configuredHouseNames = await getHouseNames()
   renderHouseOptions()
+  renderSearchHouseOptions()
   updateHouseSettings()
   await refreshBookingViews()
 })
@@ -2934,6 +3112,7 @@ async function initializeHouseConfiguration() {
   }
 
   renderHouseOptions()
+  renderSearchHouseOptions()
   updateHouseSettings()
   await refreshBookingViews()
 }

@@ -1077,9 +1077,68 @@ body {
   border-radius: 14px;
 }
 
+.search-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid #eeeeee;
+  border-radius: 16px;
+}
+
+.search-filters label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #6e6e73;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.search-filters select,
+.search-filters input {
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  background: #fff;
+}
+
+.search-clear-button {
+  grid-column: 1 / -1;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: #f0f0f2;
+  color: #1d1d1f;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .search-results {
   display: grid;
   gap: 12px;
+}
+
+.booking-status {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #e8f5eb;
+  color: #248a3d;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.booking-status.pending {
+  background: #fff1dc;
+  color: #9a5700;
+}
+
+.booking-status.expired {
+  background: #f0f0f2;
+  color: #6e6e73;
 }
 
 .search-booking-card {
@@ -1368,4 +1427,17 @@ body {
   color: white;
   font-weight: 600;
   cursor: pointer;
+}
+
+@media (max-width: 380px) {
+  .search-filters {
+    gap: 9px;
+    padding: 12px;
+  }
+
+  .search-filters select,
+  .search-filters input {
+    padding: 9px 8px;
+    font-size: 14px;
+  }
 }
