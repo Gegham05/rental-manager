@@ -1,5 +1,5 @@
 import './style.css'
-import { hasBookingConflict } from './services/bookingService'
+import { getBookingConflicts } from './services/bookingService'
 import {
   getLanguageLocale,
   translateMessage,
@@ -32,8 +32,34 @@ let configuredHouseCount = 0
 let configuredHouseNames: Record<number, string> = {}
 let selectedLanguage: AppLanguage = 'ru'
 
-const alert = (message: string) =>
-  window.alert(translateMessage(message, selectedLanguage))
+type ToastType = 'error' | 'success' | 'warning'
+
+let toastTimeout: number | undefined
+
+function showToast(message: string, type: ToastType = 'error') {
+  let toast = document.querySelector<HTMLDivElement>('#appToast')
+  if (!toast) {
+    toast = document.createElement('div')
+    toast.id = 'appToast'
+    toast.className = 'app-toast'
+    toast.setAttribute('aria-atomic', 'true')
+    document.body.append(toast)
+  }
+
+  toast.textContent = translateMessage(message, selectedLanguage)
+  toast.className = `app-toast app-toast--${type} is-visible`
+  toast.setAttribute('role', type === 'error' ? 'alert' : 'status')
+  toast.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite')
+
+  if (toastTimeout !== undefined) {
+    window.clearTimeout(toastTimeout)
+  }
+  toastTimeout = window.setTimeout(() => {
+    toast?.classList.remove('is-visible')
+  }, 5000)
+}
+
+const alert = (message: string) => showToast(message, 'error')
 const confirm = (message: string) =>
   window.confirm(translateMessage(message, selectedLanguage))
 const prompt = (message: string, defaultValue?: string) =>
@@ -984,7 +1010,10 @@ updateLanguageButtons()
 
     await renderReceiptList()
     if (errors.length > 0) {
-      alert(`Не удалось добавить некоторые фотографии:\n\n${errors.join('\n')}`)
+      showToast(
+        `Не удалось добавить некоторые фотографии:\n\n${errors.join('\n')}`,
+        'warning',
+      )
     }
   })
 
@@ -1619,7 +1648,7 @@ quickPendingForm.addEventListener('submit', async (event) => {
   await createBooking(booking)
   await refreshBookingViews()
   closeQuickPendingModal()
-  alert('Предварительная бронь сохранена.')
+  showToast('Предварительная бронь сохранена.', 'success')
 })
 
 form
@@ -2517,7 +2546,7 @@ backupFileInput.addEventListener('change', async () => {
 
     await refreshBookingViews()
 
-    alert('Резервная копия успешно восстановлена.')
+    showToast('Резервная копия успешно восстановлена.', 'success')
   } catch {
     alert('Не удалось прочитать файл резервной копии.')
   }
@@ -3616,28 +3645,55 @@ form.addEventListener('submit', async (event) => {
     alert('Нельзя создать бронь на прошедшую дату.')
     return
   }
-  
+
   if (new Date(booking.endAt) <= new Date(booking.startAt)) {
-  alert('Время выезда должно быть позже времени заезда.')
-  return
-}
-
-if (booking.status === 'confirmed') {
-  const hasConflict = await hasBookingConflict(
-    booking.houseId,
-    booking.startAt,
-    booking.endAt,
-    booking.status,
-    editingBookingId ?? undefined,
-  )
-
-  if (hasConflict) {
-    alert(
-      `${getHouseName(booking.houseId)} уже забронирован на выбранное время.`,
-    )
+    alert('Время выезда должно быть позже времени заезда.')
     return
   }
-}
+
+  if (booking.status === 'confirmed') {
+    const conflicts = await getBookingConflicts(
+      booking.houseId,
+      booking.startAt,
+      booking.endAt,
+      editingBookingId ?? undefined,
+    )
+    const confirmedConflicts = conflicts.filter(
+      (conflict) => (conflict.status ?? 'confirmed') === 'confirmed',
+    )
+    const formatConflictDetails = (bookings: Booking[]) =>
+      bookings
+        .map((conflict) => {
+          const start = new Date(conflict.startAt).toLocaleDateString(
+            getLanguageLocale(selectedLanguage),
+          )
+          const end = new Date(conflict.endAt).toLocaleDateString(
+            getLanguageLocale(selectedLanguage),
+          )
+          return `• ${conflict.guestName} — ${start}–${end}`
+        })
+        .join('\n')
+
+    if (confirmedConflicts.length > 0) {
+      alert(
+        `На выбранное время уже есть подтверждённая бронь:\n${formatConflictDetails(confirmedConflicts)}`,
+      )
+      return
+    }
+
+    const pendingConflicts = conflicts.filter(
+      (conflict) => conflict.status === 'pending',
+    )
+    if (pendingConflicts.length > 0) {
+      const shouldKeepBoth = confirm(
+        `Найдены пересекающиеся предварительные брони:\n${formatConflictDetails(pendingConflicts)}\n\n` +
+          'Создать подтверждённую бронь и оставить обе брони?',
+      )
+      if (!shouldKeepBoth) {
+        return
+      }
+    }
+  }
 
   if (existingBooking) {
     booking.id = existingBooking.id
@@ -3663,5 +3719,5 @@ if (booking.status === 'confirmed') {
     closeModal()
     saveBookingButton.textContent = 'Забронировать'
 
-    alert('Бронь сохранена!')
+    showToast('Бронь сохранена!', 'success')
 })

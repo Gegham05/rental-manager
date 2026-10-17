@@ -1,23 +1,18 @@
 import type { Booking } from '../models/Booking'
 import { getAllBookings } from '../storage/bookingRepository'
 
-export async function hasBookingConflict(
+export async function getBookingConflicts(
   houseId: number,
   startAt: string,
   endAt: string,
-  status: 'confirmed' | 'pending',
   excludeBookingId?: string,
-): Promise<boolean> {
-  if (status === 'pending') {
-    return false
-  }
-
+): Promise<Booking[]> {
   const bookings = await getAllBookings()
 
   const newStart = new Date(startAt)
   const newEnd = new Date(endAt)
 
-  return bookings.some((booking: Booking) => {
+  return bookings.filter((booking: Booking) => {
     if (booking.id === excludeBookingId) {
       return false
     }
@@ -26,11 +21,8 @@ export async function hasBookingConflict(
       return false
     }
 
-    // Старые брони без status считаем confirmed
     const existingStatus = booking.status ?? 'confirmed'
-
-    // Pending и expired НИКОГДА не блокируют бронь
-    if (existingStatus === 'pending') {
+    if (existingStatus === 'expired') {
       return false
     }
 
