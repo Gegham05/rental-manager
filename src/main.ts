@@ -1,6 +1,8 @@
 import './style.css'
 import { getBookingConflicts } from './services/bookingService'
 import {
+  formatGuestCapacity,
+  formatStayDuration,
   getLanguageLocale,
   translateMessage,
   translateText,
@@ -8,11 +10,13 @@ import {
 } from './services/i18n'
 import { convertReceiptImageToPdf } from './services/receiptPdfService'
 import type { Booking } from './models/Booking'
+import type { HouseProfile } from './models/HouseProfile'
 import type { Receipt } from './models/Receipt'
 import {
   addReceipt,
   createBooking,
   deleteReceipt,
+  getAllHouseProfiles,
   getAllBookings,
   getAllReceipts,
   getReceiptsForBooking,
@@ -22,9 +26,11 @@ import {
   getHouseCount,
   getAppLanguage,
   getHouseNames,
+  getHouseProfile,
   setHouseCount,
   setAppLanguage,
   setHouseName,
+  saveHouseProfile,
   removeHouseAndBookings,
 } from './storage/bookingRepository'
 
@@ -97,6 +103,32 @@ function escapeHtml(value: string): string {
   })
 }
 
+function isHouseProfile(value: unknown): value is HouseProfile {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const profile = value as Record<string, unknown>
+  return (
+    Number.isSafeInteger(profile.houseId) &&
+    typeof profile.city === 'string' &&
+    typeof profile.address === 'string' &&
+    typeof profile.description === 'string' &&
+    Number.isSafeInteger(profile.maxGuests) &&
+    Number(profile.maxGuests) > 0 &&
+    (profile.pricePerNight === null ||
+      (typeof profile.pricePerNight === 'number' &&
+        Number.isFinite(profile.pricePerNight) &&
+        profile.pricePerNight >= 0)) &&
+    Array.isArray(profile.amenities) &&
+    profile.amenities.every((amenity) => typeof amenity === 'string') &&
+    (profile.photoDataUrl === null ||
+      (typeof profile.photoDataUrl === 'string' &&
+        profile.photoDataUrl.startsWith('data:image/'))) &&
+    typeof profile.isPublished === 'boolean'
+  )
+}
+
 function renderContactPhoneButton(phone: string): string {
   const escapedPhone = escapeHtml(phone)
   return `
@@ -162,8 +194,17 @@ const app = document.querySelector<HTMLDivElement>('#app')!
 app.innerHTML = `
   <main class="app role-selection-page" id="roleSelectionPage">
     <header class="role-selection-header">
-      <p class="date">Rental Manager</p>
-      <h1>Как вы хотите использовать приложение?</h1>
+      <div>
+        <p class="date">Rental Manager</p>
+        <h1>Как вы хотите использовать приложение?</h1>
+      </div>
+      <button
+        type="button"
+        class="language-button language-switcher language-toggle"
+        id="roleLanguageToggle"
+        aria-label="Сменить язык"
+        title="Сменить язык"
+      ></button>
     </header>
     <div class="role-selection-options">
       <button type="button" class="role-option role-option--business" id="businessRoleButton" disabled>
@@ -178,17 +219,54 @@ app.innerHTML = `
       </button>
     </div>
   </main>
-  <main class="app hidden-page" id="clientModePage">
+  <main class="app hidden-page client-mode-page" id="clientModePage">
     <header class="client-mode-header">
-      <p class="date">Rental Manager</p>
-      <h1>Клиентский режим</h1>
+      <div>
+        <p class="date">Rental Manager</p>
+        <h1>Найдите жильё для поездки</h1>
+      </div>
+      <button
+        type="button"
+        class="language-button language-switcher language-toggle"
+        id="clientLanguageToggle"
+        aria-label="Сменить язык"
+        title="Сменить язык"
+      ></button>
     </header>
-    <section class="client-mode-placeholder">
-      <span class="client-mode-placeholder-icon" aria-hidden="true">⌕</span>
-      <h2>Клиентская часть в разработке</h2>
-      <p>Здесь появятся поиск жилья, просмотр домов и отправка запроса на бронирование.</p>
-      <button type="button" class="add-button" id="clientBackButton">Назад к выбору роли</button>
-    </section>
+    <p class="client-mode-intro">Укажите место, даты и количество гостей, чтобы найти подходящее жильё.</p>
+    <form class="client-search-form" id="clientSearchForm">
+      <label class="client-search-destination">
+        Куда хотите поехать?
+        <input
+          type="text"
+          id="clientDestination"
+          name="destination"
+          placeholder="Город или место"
+          autocomplete="off"
+          required
+        >
+      </label>
+      <div class="client-search-dates">
+        <label>
+          Заезд
+          <input type="date" id="clientCheckIn" name="checkIn" required>
+        </label>
+        <label>
+          Выезд
+          <input type="date" id="clientCheckOut" name="checkOut" required>
+        </label>
+        <label>
+          Гости
+          <input type="number" id="clientGuestCount" name="guests" min="1" value="2" required>
+        </label>
+      </div>
+      <button class="client-search-button" type="submit">
+        <span aria-hidden="true">⌕</span>
+        Найти жильё
+      </button>
+    </form>
+    <section class="client-search-results hidden-page" id="clientSearchResults" aria-live="polite"></section>
+    <button type="button" class="client-back-button" id="clientBackButton">Назад к выбору роли</button>
   </main>
   <main class="app hidden-page" id="todayPage">
     <header class="header">
@@ -342,7 +420,7 @@ app.innerHTML = `
         <h1>Настройки</h1>
         <button
           type="button"
-          class="language-button language-switcher"
+          class="language-button language-switcher language-toggle"
           id="languageToggle"
           aria-label="Сменить язык"
           title="Сменить язык"
@@ -381,6 +459,61 @@ app.innerHTML = `
       Сохранить название
     </button>
   </div>
+  <section class="property-profile-editor">
+    <h3>Информация для клиентов</h3>
+    <label for="profileHouseSelect">Объект</label>
+    <select id="profileHouseSelect"></select>
+    <form id="propertyProfileForm">
+      <label>
+        Город или район
+        <input type="text" name="city" maxlength="100" autocomplete="address-level2">
+      </label>
+      <label>
+        Адрес
+        <input type="text" name="address" maxlength="200" autocomplete="street-address">
+      </label>
+      <label>
+        Описание
+        <textarea name="description" rows="4" maxlength="2000"></textarea>
+      </label>
+      <div class="property-profile-numbers">
+        <label>
+          Максимум гостей
+          <input type="number" name="maxGuests" min="1" max="100" step="1" value="2" required>
+        </label>
+        <label>
+          Цена за ночь (֏)
+          <input type="number" name="pricePerNight" min="0" step="1">
+        </label>
+      </div>
+      <fieldset class="property-amenities">
+        <legend>Удобства</legend>
+        <label><input type="checkbox" name="amenities" value="wifi"> Wi-Fi</label>
+        <label><input type="checkbox" name="amenities" value="kitchen"> Кухня</label>
+        <label><input type="checkbox" name="amenities" value="parking"> Парковка</label>
+        <label><input type="checkbox" name="amenities" value="pool"> Бассейн</label>
+        <label><input type="checkbox" name="amenities" value="airConditioning"> Кондиционер</label>
+        <label><input type="checkbox" name="amenities" value="washingMachine"> Стиральная машина</label>
+        <label><input type="checkbox" name="amenities" value="view"> Вид</label>
+      </fieldset>
+      <label class="property-photo-label">
+        Фото жилья
+        <input type="file" id="propertyPhotoInput" accept="image/*">
+      </label>
+      <div class="property-photo-preview hidden-page" id="propertyPhotoPreview">
+        <img id="propertyPhotoImage" alt="Фото жилья">
+        <button type="button" class="backup-button secondary" id="removePropertyPhoto">Удалить фото</button>
+      </div>
+      <label class="property-publish-toggle">
+        <input type="checkbox" name="isPublished">
+        Показывать объект в клиентском поиске на этом устройстве
+      </label>
+      <p class="property-local-note">
+        Пока данные доступны только в этом браузере. Для публикации клиентам с других устройств понадобится общий сервер.
+      </p>
+      <button class="backup-button" type="submit">Сохранить карточку жилья</button>
+    </form>
+  </section>
 </section>
 </main>
   <nav class="bottom-nav hidden-page">
@@ -689,8 +822,8 @@ app.innerHTML = `
   </div>
 `
 
-const languageToggle =
-  document.querySelector<HTMLButtonElement>('#languageToggle')!
+const languageToggles =
+  document.querySelectorAll<HTMLButtonElement>('.language-toggle')
 const originalTextByNode =
   new WeakMap<Text, { original: string; translated: string }>()
 const originalAttributesByElement =
@@ -830,13 +963,15 @@ function updateLanguageButtons() {
     selectedLanguage === 'hy' ? 'ru' : selectedLanguage === 'ru' ? 'en' : 'hy'
   const next = languageOptions[nextLanguage]
 
-  languageToggle.innerHTML = current.flag
-  languageToggle.setAttribute(
-    'aria-label',
-    `${current.name}. ${translateText('Переключить на', selectedLanguage)} ${next.name}`,
-  )
-  languageToggle.title =
-    `${current.name} · ${translateText('Переключить на', selectedLanguage)} ${next.name}`
+  languageToggles.forEach((button) => {
+    button.innerHTML = current.flag
+    button.setAttribute(
+      'aria-label',
+      `${current.name}. ${translateText('Переключить на', selectedLanguage)} ${next.name}`,
+    )
+    button.title =
+      `${current.name} · ${translateText('Переключить на', selectedLanguage)} ${next.name}`
+  })
 }
 
 async function changeLanguage(language: string) {
@@ -854,10 +989,16 @@ async function changeLanguage(language: string) {
   await refreshBookingViews()
 }
 
-languageToggle.addEventListener('click', () => {
-  const nextLanguage: AppLanguage =
-    selectedLanguage === 'hy' ? 'ru' : selectedLanguage === 'ru' ? 'en' : 'hy'
-  void changeLanguage(nextLanguage)
+languageToggles.forEach((button) => {
+  button.addEventListener('click', () => {
+    const nextLanguage: AppLanguage =
+      selectedLanguage === 'hy'
+        ? 'ru'
+        : selectedLanguage === 'ru'
+          ? 'en'
+          : 'hy'
+    void changeLanguage(nextLanguage)
+  })
 })
 
 updateLanguageButtons()
@@ -1233,6 +1374,14 @@ function showClientMode() {
   searchPage.classList.add('hidden-page')
   settingsPage.classList.add('hidden-page')
   bottomNav.classList.add('hidden-page')
+  const today = new Date()
+  const localToday = [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, '0'),
+    String(today.getDate()).padStart(2, '0'),
+  ].join('-')
+  clientCheckIn.min = localToday
+  clientCheckOut.min = clientCheckIn.value || localToday
 }
 
 document
@@ -1241,6 +1390,145 @@ document
 document
   .querySelector<HTMLButtonElement>('#clientBackButton')!
   .addEventListener('click', showRoleSelection)
+
+const clientSearchForm =
+  document.querySelector<HTMLFormElement>('#clientSearchForm')!
+const clientDestination =
+  document.querySelector<HTMLInputElement>('#clientDestination')!
+const clientCheckIn =
+  document.querySelector<HTMLInputElement>('#clientCheckIn')!
+const clientCheckOut =
+  document.querySelector<HTMLInputElement>('#clientCheckOut')!
+const clientSearchResults =
+  document.querySelector<HTMLElement>('#clientSearchResults')!
+
+const clientGuestCount =
+  document.querySelector<HTMLInputElement>('#clientGuestCount')!
+
+const amenityLabels: Record<string, string> = {
+  wifi: 'Wi-Fi',
+  kitchen: 'Кухня',
+  parking: 'Парковка',
+  pool: 'Бассейн',
+  airConditioning: 'Кондиционер',
+  washingMachine: 'Стиральная машина',
+  view: 'Вид',
+}
+
+async function renderClientSearchResults() {
+  const profiles = (await getAllHouseProfiles()).filter(
+    (profile) => profile.isPublished,
+  )
+  const bookings = await getAllBookings()
+  const destination = clientDestination.value.trim().toLocaleLowerCase()
+  const checkIn = new Date(`${clientCheckIn.value}T00:00:00`)
+  const checkOut = new Date(`${clientCheckOut.value}T00:00:00`)
+  const guestCount = Number(clientGuestCount.value)
+  const nights = Math.round(
+    (checkOut.getTime() - checkIn.getTime()) / (24 * 60 * 60 * 1000),
+  )
+
+  const availableProfiles = profiles.filter((profile) => {
+    if (
+      !`${profile.city} ${profile.address}`
+        .toLocaleLowerCase()
+        .includes(destination) ||
+      profile.maxGuests < guestCount ||
+      profile.pricePerNight === null
+    ) {
+      return false
+    }
+
+    return !bookings.some((booking) => {
+      if (
+        booking.houseId !== profile.houseId ||
+        (booking.status ?? 'confirmed') !== 'confirmed'
+      ) {
+        return false
+      }
+      return (
+        checkIn < new Date(booking.endAt) &&
+        checkOut > new Date(booking.startAt)
+      )
+    })
+  })
+
+  if (availableProfiles.length === 0) {
+    clientSearchResults.innerHTML = `
+      <div class="client-search-empty">
+        ${translateText('На эти даты нет доступных объектов с указанной вместимостью.', selectedLanguage)}
+      </div>
+    `
+  } else {
+    clientSearchResults.innerHTML = `
+      <h2 class="client-results-heading">${translateText('Найдены варианты', selectedLanguage)}: ${availableProfiles.length}</h2>
+      ${availableProfiles
+        .map((profile) => {
+          const safePhoto =
+            profile.photoDataUrl?.startsWith('data:image/')
+              ? profile.photoDataUrl
+              : null
+          const price = profile.pricePerNight! * nights
+          const amenities = profile.amenities
+            .filter((amenity) => amenity in amenityLabels)
+            .map(
+              (amenity) =>
+                `<span class="client-property-chip">${translateText(amenityLabels[amenity], selectedLanguage)}</span>`,
+            )
+            .join('')
+          return `
+            <article class="client-property-card">
+              ${
+                safePhoto
+                  ? `<img class="client-property-photo" src="${safePhoto}" alt="${escapeHtml(getHouseName(profile.houseId))}">`
+                  : '<div class="client-property-photo" aria-hidden="true"></div>'
+              }
+              <div class="client-property-content">
+                <h3>${escapeHtml(getHouseName(profile.houseId))}</h3>
+                <p class="client-property-location">${escapeHtml(profile.city)}${profile.address ? ` · ${escapeHtml(profile.address)}` : ''}</p>
+                ${profile.description ? `<p class="client-property-description">${escapeHtml(profile.description)}</p>` : ''}
+                <div class="client-property-meta">
+                  <span class="client-property-chip">${formatGuestCapacity(profile.maxGuests, selectedLanguage)}</span>
+                  ${amenities}
+                </div>
+                <p class="client-property-price">${price.toLocaleString(getLanguageLocale(selectedLanguage))} ֏ · ${formatStayDuration(nights, selectedLanguage)}</p>
+              </div>
+            </article>
+          `
+        })
+        .join('')}
+    `
+  }
+
+  clientSearchResults.classList.remove('hidden-page')
+  translateDom(clientSearchResults)
+}
+
+clientCheckIn.addEventListener('change', () => {
+  clientCheckOut.min = clientCheckIn.value || clientCheckIn.min
+  if (clientCheckOut.value && clientCheckOut.value <= clientCheckIn.value) {
+    clientCheckOut.value = ''
+  }
+})
+
+clientSearchForm.addEventListener('submit', async (event) => {
+  event.preventDefault()
+  if (!clientSearchForm.reportValidity()) {
+    return
+  }
+  if (!clientDestination.value.trim()) {
+    clientDestination.focus()
+    showToast('Укажите город или место поездки.')
+    return
+  }
+  if (clientCheckOut.value <= clientCheckIn.value) {
+    showToast('Дата выезда должна быть позже даты заезда.')
+    clientCheckOut.focus()
+    return
+  }
+  await renderClientSearchResults()
+  clientSearchResults.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+})
 
 todayNav.addEventListener('click', showTodayPage)
 calendarNav.addEventListener('click', showCalendarPage)
@@ -2605,11 +2893,13 @@ renderBackupStatus()
 exportBackupButton.addEventListener('click', async () => {
   const bookings = await getAllBookings()
   const receipts = await getAllReceipts()
+  const houseProfiles = await getAllHouseProfiles()
 
   const backup = {
-    version: 1,
+    version: 2,
     createdAt: new Date().toISOString(),
     bookings,
+    houseProfiles,
     receipts: await Promise.all(
       receipts.map(async (receipt) => ({
         id: receipt.id,
@@ -2674,7 +2964,7 @@ backupFileInput.addEventListener('change', async () => {
     const backup = JSON.parse(text)
 
     if (
-      backup.version !== 1 ||
+      (backup.version !== 1 && backup.version !== 2) ||
       !Array.isArray(backup.bookings)
     ) {
       alert('Это некорректный файл резервной копии.')
@@ -2721,7 +3011,22 @@ backupFileInput.addEventListener('change', async () => {
       })
     }
 
-    await replaceAllBookings(backup.bookings, importedReceipts)
+    let importedHouseProfiles: HouseProfile[] = []
+    if (backup.houseProfiles !== undefined) {
+      if (!Array.isArray(backup.houseProfiles)) {
+        throw new Error('Некорректный список объектов в резервной копии.')
+      }
+      if (!backup.houseProfiles.every(isHouseProfile)) {
+        throw new Error('Некорректный объект в резервной копии.')
+      }
+      importedHouseProfiles = backup.houseProfiles
+    }
+
+    await replaceAllBookings(
+      backup.bookings,
+      importedReceipts,
+      importedHouseProfiles,
+    )
 
     const importedHouseCount = backup.bookings.reduce(
       (maxHouseId: number, booking: Booking) =>
@@ -2739,7 +3044,22 @@ backupFileInput.addEventListener('change', async () => {
       updateHouseSettings()
     }
 
+    if (importedHouseProfiles) {
+      const profileHouseCount = importedHouseProfiles.reduce(
+        (maximum, profile) => Math.max(maximum, profile.houseId),
+        0,
+      )
+      if (profileHouseCount > configuredHouseCount) {
+        configuredHouseCount = profileHouseCount
+        await setHouseCount(configuredHouseCount)
+        renderHouseOptions()
+        renderSearchHouseOptions()
+        updateHouseSettings()
+      }
+    }
+
     await refreshBookingViews()
+    await refreshPropertyProfileEditor()
 
     showToast('Резервная копия успешно восстановлена.', 'success')
   } catch {
@@ -3187,6 +3507,19 @@ const houseNameInput =
   document.querySelector<HTMLInputElement>('#houseNameInput')!
 const saveHouseNameButton =
   document.querySelector<HTMLButtonElement>('#saveHouseName')!
+const profileHouseSelect =
+  document.querySelector<HTMLSelectElement>('#profileHouseSelect')!
+const propertyProfileForm =
+  document.querySelector<HTMLFormElement>('#propertyProfileForm')!
+const propertyPhotoInput =
+  document.querySelector<HTMLInputElement>('#propertyPhotoInput')!
+const propertyPhotoPreview =
+  document.querySelector<HTMLDivElement>('#propertyPhotoPreview')!
+const propertyPhotoImage =
+  document.querySelector<HTMLImageElement>('#propertyPhotoImage')!
+const removePropertyPhotoButton =
+  document.querySelector<HTMLButtonElement>('#removePropertyPhoto')!
+let propertyPhotoDataUrl: string | null = null
 const businessRoleButton =
   document.querySelector<HTMLButtonElement>('#businessRoleButton')!
 const clientRoleButton =
@@ -3208,6 +3541,151 @@ function enterBusinessMode() {
 
 businessRoleButton.addEventListener('click', enterBusinessMode)
 businessModeChangeButton.addEventListener('click', showRoleSelection)
+
+async function refreshPropertyProfileEditor() {
+  const selectedHouseId = Number(profileHouseSelect.value) || 1
+  const options = getHouseIds()
+    .map(
+      (houseId) =>
+        `<option value="${houseId}">${escapeHtml(getHouseName(houseId))}</option>`,
+    )
+    .join('')
+  profileHouseSelect.innerHTML = options
+  if (configuredHouseCount > 0) {
+    profileHouseSelect.value = String(
+      Math.min(selectedHouseId, configuredHouseCount),
+    )
+  }
+
+  await loadPropertyProfile(Number(profileHouseSelect.value))
+}
+
+async function loadPropertyProfile(houseId: number) {
+  const profile = await getHouseProfile(houseId)
+  const setFieldValue = (name: string, value: string) => {
+    const input = propertyProfileForm.elements.namedItem(name)
+    if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
+      input.value = value
+    }
+  }
+  setFieldValue('city', profile?.city ?? '')
+  setFieldValue('address', profile?.address ?? '')
+  setFieldValue('description', profile?.description ?? '')
+  setFieldValue('maxGuests', String(profile?.maxGuests ?? 2))
+  setFieldValue(
+    'pricePerNight',
+    profile?.pricePerNight === null || profile?.pricePerNight === undefined
+      ? ''
+      : String(profile.pricePerNight),
+  )
+
+  const amenities = new Set(profile?.amenities ?? [])
+  propertyProfileForm
+    .querySelectorAll<HTMLInputElement>('input[name="amenities"]')
+    .forEach((input) => {
+      input.checked = amenities.has(input.value)
+    })
+  const publishInput =
+    propertyProfileForm.querySelector<HTMLInputElement>(
+      'input[name="isPublished"]',
+    )!
+  publishInput.checked = profile?.isPublished ?? false
+  propertyPhotoDataUrl = profile?.photoDataUrl ?? null
+  updatePropertyPhotoPreview()
+}
+
+function updatePropertyPhotoPreview() {
+  if (!propertyPhotoDataUrl) {
+    propertyPhotoPreview.classList.add('hidden-page')
+    propertyPhotoImage.removeAttribute('src')
+    return
+  }
+  propertyPhotoImage.src = propertyPhotoDataUrl
+  propertyPhotoPreview.classList.remove('hidden-page')
+}
+
+profileHouseSelect.addEventListener('change', async () => {
+  await loadPropertyProfile(Number(profileHouseSelect.value))
+})
+
+propertyPhotoInput.addEventListener('change', async () => {
+  const file = propertyPhotoInput.files?.[0]
+  propertyPhotoInput.value = ''
+  if (!file) {
+    return
+  }
+  if (!file.type.startsWith('image/') || file.size > 8 * 1024 * 1024) {
+    showToast('Выберите фото размером до 8 МБ.')
+    return
+  }
+  try {
+    const bitmap = await createImageBitmap(file)
+    const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale))
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+    const context = canvas.getContext('2d')
+    if (!context) {
+      throw new Error('Could not prepare image canvas.')
+    }
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    bitmap.close()
+    propertyPhotoDataUrl = canvas.toDataURL('image/jpeg', 0.82)
+    updatePropertyPhotoPreview()
+  } catch (error) {
+    console.error('Unable to process property photo.', error)
+    showToast('Не удалось обработать фото.')
+  }
+})
+
+removePropertyPhotoButton.addEventListener('click', () => {
+  propertyPhotoDataUrl = null
+  updatePropertyPhotoPreview()
+})
+
+propertyProfileForm.addEventListener('submit', async (event) => {
+  event.preventDefault()
+  const houseId = Number(profileHouseSelect.value)
+  const formData = new FormData(propertyProfileForm)
+  const maxGuests = Number(formData.get('maxGuests'))
+  const priceValue = String(formData.get('pricePerNight') ?? '').trim()
+  const pricePerNight = priceValue ? Number(priceValue) : null
+  const isPublished = formData.get('isPublished') === 'on'
+
+  if (
+    !Number.isSafeInteger(houseId) ||
+    houseId < 1 ||
+    houseId > configuredHouseCount ||
+    !Number.isSafeInteger(maxGuests) ||
+    maxGuests < 1 ||
+    maxGuests > 100 ||
+    (pricePerNight !== null &&
+      (!Number.isFinite(pricePerNight) || pricePerNight < 0))
+  ) {
+    showToast('Проверьте вместимость и цену объекта.')
+    return
+  }
+
+  const city = String(formData.get('city') ?? '').trim()
+  if (isPublished && (!city || pricePerNight === null)) {
+    showToast('Для публикации укажите город и цену за ночь.')
+    return
+  }
+
+  const profile: HouseProfile = {
+    houseId,
+    city,
+    address: String(formData.get('address') ?? '').trim(),
+    description: String(formData.get('description') ?? '').trim(),
+    maxGuests,
+    pricePerNight,
+    amenities: formData.getAll('amenities').map(String),
+    photoDataUrl: propertyPhotoDataUrl,
+    isPublished,
+  }
+  await saveHouseProfile(profile)
+  showToast('Объект сохранён.', 'success')
+})
 
 houseToRenameSelect.addEventListener('change', () => {
   houseNameInput.value = getHouseName(Number(houseToRenameSelect.value))
@@ -3237,6 +3715,7 @@ saveHouseNameButton.addEventListener('click', async () => {
   updateHouseSettings()
   renderHouseOptions(Number(houseSelect.value))
   renderSearchHouseOptions()
+  await refreshPropertyProfileEditor()
   await refreshBookingViews()
 })
 
@@ -3256,6 +3735,7 @@ houseSetupForm.addEventListener('submit', async (event) => {
   renderHouseOptions()
   renderSearchHouseOptions()
   updateHouseSettings()
+  await refreshPropertyProfileEditor()
   houseSetupModal.classList.add('hidden')
   await refreshBookingViews()
   if (pendingBusinessSetup) {
@@ -3276,6 +3756,7 @@ addHouseButton.addEventListener('click', async () => {
   renderHouseOptions(configuredHouseCount)
   renderSearchHouseOptions()
   updateHouseSettings()
+  await refreshPropertyProfileEditor()
   await refreshBookingViews()
 })
 
@@ -3319,6 +3800,7 @@ removeHouseButton.addEventListener('click', async () => {
   renderHouseOptions()
   renderSearchHouseOptions()
   updateHouseSettings()
+  await refreshPropertyProfileEditor()
   await refreshBookingViews()
 })
 
@@ -3335,16 +3817,29 @@ async function initializeHouseConfiguration() {
   configuredHouseNames = await getHouseNames()
 
   if (savedHouseCount === undefined) {
-    const bookings = await getAllBookings()
-    const maxExistingHouseId = bookings.reduce(
+    const [bookings, houseProfiles] = await Promise.all([
+      getAllBookings(),
+      getAllHouseProfiles(),
+    ])
+    const maxExistingBookingHouseId = bookings.reduce(
       (maxHouseId, booking) =>
-        Number.isSafeInteger(booking.houseId) && booking.houseId > maxHouseId
-          ? booking.houseId
-          : maxHouseId,
+        Math.max(
+          maxHouseId,
+          Number.isSafeInteger(booking.houseId) ? booking.houseId : 0,
+        ),
       0,
     )
+    const maxProfileHouseId = houseProfiles.reduce(
+      (maxHouseId, profile) =>
+        Math.max(maxHouseId, profile.houseId),
+      0,
+    )
+    const maxExistingHouseId = Math.max(
+      maxExistingBookingHouseId,
+      maxProfileHouseId,
+    )
 
-    if (bookings.length > 0) {
+    if (bookings.length > 0 || houseProfiles.length > 0) {
       configuredHouseCount = Math.max(3, maxExistingHouseId)
       await setHouseCount(configuredHouseCount)
     } else {
@@ -3365,6 +3860,7 @@ async function initializeHouseConfiguration() {
   renderHouseOptions()
   renderSearchHouseOptions()
   updateHouseSettings()
+  await refreshPropertyProfileEditor()
   await refreshBookingViews()
   appReady = true
   businessRoleButton.disabled = false

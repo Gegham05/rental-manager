@@ -1,13 +1,15 @@
 import { openDB } from 'idb'
 import type { AppLanguage } from '../services/i18n'
 import type { Booking } from '../models/Booking'
+import type { HouseProfile } from '../models/HouseProfile'
 import type { Receipt } from '../models/Receipt'
 
 const DB_NAME = 'rental-manager'
-const DB_VERSION = 3
+const DB_VERSION = 4
 const BOOKING_STORE = 'bookings'
 const SETTINGS_STORE = 'settings'
 const RECEIPT_STORE = 'receipts'
+const HOUSE_STORE = 'houses'
 
 const dbPromise = openDB(DB_NAME, DB_VERSION, {
   upgrade(db, oldVersion, _newVersion, transaction) {
@@ -28,6 +30,12 @@ const dbPromise = openDB(DB_NAME, DB_VERSION, {
         keyPath: 'id',
       })
       receiptStore.createIndex('bookingId', 'bookingId')
+    }
+
+    if (!db.objectStoreNames.contains(HOUSE_STORE)) {
+      db.createObjectStore(HOUSE_STORE, {
+        keyPath: 'houseId',
+      })
     }
 
     if (oldVersion === 1) {
@@ -120,13 +128,14 @@ export async function removeHouseAndBookings(
 ): Promise<void> {
   const db = await dbPromise
   const transaction = db.transaction(
-    [BOOKING_STORE, SETTINGS_STORE, RECEIPT_STORE],
+    [BOOKING_STORE, SETTINGS_STORE, RECEIPT_STORE, HOUSE_STORE],
     'readwrite',
   )
   const bookingStore = transaction.objectStore(BOOKING_STORE)
   const receiptIndex = transaction
     .objectStore(RECEIPT_STORE)
     .index('bookingId')
+  const houseStore = transaction.objectStore(HOUSE_STORE)
   let cursor = await bookingStore.openCursor()
 
   while (cursor) {
@@ -143,6 +152,19 @@ export async function removeHouseAndBookings(
       })
     }
     cursor = await cursor.continue()
+  }
+
+  let houseCursor = await houseStore.openCursor()
+  while (houseCursor) {
+    if (houseCursor.value.houseId === houseId) {
+      await houseCursor.delete()
+    } else if (houseCursor.value.houseId > houseId) {
+      await houseCursor.update({
+        ...houseCursor.value,
+        houseId: houseCursor.value.houseId - 1,
+      })
+    }
+    houseCursor = await houseCursor.continue()
   }
 
   const settingsStore = transaction.objectStore(SETTINGS_STORE)
@@ -229,28 +251,53 @@ export async function deleteReceipt(id: string): Promise<void> {
   await db.delete(RECEIPT_STORE, id)
 }
 
+export async function getHouseProfile(
+  houseId: number,
+): Promise<HouseProfile | undefined> {
+  const db = await dbPromise
+  return db.get(HOUSE_STORE, houseId)
+}
+
+export async function getAllHouseProfiles(): Promise<HouseProfile[]> {
+  const db = await dbPromise
+  return db.getAll(HOUSE_STORE)
+}
+
+export async function saveHouseProfile(
+  profile: HouseProfile,
+): Promise<void> {
+  const db = await dbPromise
+  await db.put(HOUSE_STORE, profile)
+}
+
 export async function replaceAllBookings(
   bookings: Booking[],
   receipts: Receipt[] = [],
+  houseProfiles: HouseProfile[] = [],
 ): Promise<void> {
   const db = await dbPromise
 
   const transaction = db.transaction(
-    [BOOKING_STORE, RECEIPT_STORE],
+    [BOOKING_STORE, RECEIPT_STORE, HOUSE_STORE],
     'readwrite',
   )
 
   const bookingStore = transaction.objectStore(BOOKING_STORE)
   const receiptStore = transaction.objectStore(RECEIPT_STORE)
+  const houseStore = transaction.objectStore(HOUSE_STORE)
 
   await bookingStore.clear()
   await receiptStore.clear()
+  await houseStore.clear()
 
   for (const booking of bookings) {
     await bookingStore.put(booking)
   }
   for (const receipt of receipts) {
     await receiptStore.put(receipt)
+  }
+  for (const profile of houseProfiles) {
+    await houseStore.put(profile)
   }
 
   await transaction.done
