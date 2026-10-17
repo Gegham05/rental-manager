@@ -64,6 +64,114 @@ button {
   padding: 32px 0;
 }
 
+.role-selection-page {
+  min-height: calc(100vh - 90px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 28px;
+}
+
+.role-selection-header h1 {
+  max-width: 540px;
+}
+
+.role-selection-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.role-option {
+  display: grid;
+  min-height: 210px;
+  align-content: start;
+  justify-items: start;
+  gap: 12px;
+  padding: 24px;
+  border: 1px solid #e5e5e7;
+  border-radius: 20px;
+  background: #fff;
+  color: #1d1d1f;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    border-color 160ms ease;
+}
+
+.role-option:hover,
+.role-option:focus-visible {
+  transform: translateY(-2px);
+  border-color: #b7b7bd;
+  outline: none;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+}
+
+.role-option:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.role-option--business {
+  background: #1d1d1f;
+  color: #fff;
+}
+
+.role-option-icon,
+.client-mode-placeholder-icon {
+  font-size: 32px;
+  line-height: 1;
+}
+
+.role-option-title {
+  font-size: 22px;
+  font-weight: 650;
+}
+
+.role-option-description {
+  color: #86868b;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.role-option--business .role-option-description {
+  color: #c7c7cc;
+}
+
+.client-mode-header {
+  margin-bottom: 28px;
+}
+
+.client-mode-placeholder {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  padding: 48px 24px;
+  border-radius: 20px;
+  background: #fff;
+  text-align: center;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+}
+
+.client-mode-placeholder-icon {
+  color: #86868b;
+  font-size: 40px;
+}
+
+.client-mode-placeholder h2,
+.client-mode-placeholder p {
+  margin: 0;
+}
+
+.client-mode-placeholder p {
+  max-width: 460px;
+  color: #6e6e73;
+  line-height: 1.5;
+}
+
 .header {
   display: flex;
   justify-content: space-between;
@@ -121,6 +229,91 @@ h1 {
   font-weight: 400;
 }
 
+.today-summary {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.today-summary-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.today-summary-panel {
+  min-width: 0;
+  padding: 16px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+}
+
+.today-summary-panel h2,
+.section-title {
+  margin: 0 0 12px;
+  font-size: 17px;
+}
+
+.section-title {
+  margin-top: 0;
+}
+
+.today-summary-empty {
+  margin: 0;
+  color: #86868b;
+  font-size: 14px;
+}
+
+.today-summary-booking {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 0;
+  border: 0;
+  border-top: 1px solid #f0f0f2;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.today-summary-booking:first-of-type {
+  border-top: 0;
+}
+
+.today-summary-booking-main {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.today-summary-booking-main strong,
+.today-summary-booking-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.today-summary-booking-main span {
+  color: #6e6e73;
+  font-size: 14px;
+}
+
+.today-summary-time {
+  flex: 0 0 auto;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.today-summary-booking:hover,
+.today-summary-booking:focus-visible {
+  color: #0066cc;
+  outline: none;
+}
+
 .houses {
   display: grid;
   gap: 12px;
@@ -162,6 +355,19 @@ h1 {
 }
 
 @media (max-width: 500px) {
+  .role-selection-options {
+    grid-template-columns: 1fr;
+  }
+
+  .role-option {
+    min-height: 160px;
+    padding: 20px;
+  }
+
+  .today-summary-columns {
+    grid-template-columns: 1fr;
+  }
+
   .app {
     width: calc(100% - 24px);
     padding: 20px 0;
@@ -800,6 +1006,10 @@ textarea {
 
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
   z-index: 50;
+}
+
+.bottom-nav.hidden-page {
+  display: none;
 }
 
 .nav-button {
@@ -1483,6 +1693,10 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .role-option {
+    transition: none;
+  }
+
   .app-toast {
     transition: none;
   }

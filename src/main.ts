@@ -31,6 +31,8 @@ import {
 let configuredHouseCount = 0
 let configuredHouseNames: Record<number, string> = {}
 let selectedLanguage: AppLanguage = 'ru'
+let appReady = false
+let pendingBusinessSetup = false
 
 type ToastType = 'error' | 'success' | 'warning'
 
@@ -158,7 +160,37 @@ function pdfDataUrlToBlob(dataUrl: string): Blob {
 const app = document.querySelector<HTMLDivElement>('#app')!
 
 app.innerHTML = `
-  <main class="app" id="todayPage">
+  <main class="app role-selection-page" id="roleSelectionPage">
+    <header class="role-selection-header">
+      <p class="date">Rental Manager</p>
+      <h1>Как вы хотите использовать приложение?</h1>
+    </header>
+    <div class="role-selection-options">
+      <button type="button" class="role-option role-option--business" id="businessRoleButton" disabled>
+        <span class="role-option-icon" aria-hidden="true">⌂</span>
+        <span class="role-option-title">Предприниматель</span>
+        <span class="role-option-description">Управлять домами и бронированиями</span>
+      </button>
+      <button type="button" class="role-option" id="clientRoleButton" disabled>
+        <span class="role-option-icon" aria-hidden="true">⌕</span>
+        <span class="role-option-title">Клиент</span>
+        <span class="role-option-description">Найти жильё и оформить бронирование</span>
+      </button>
+    </div>
+  </main>
+  <main class="app hidden-page" id="clientModePage">
+    <header class="client-mode-header">
+      <p class="date">Rental Manager</p>
+      <h1>Клиентский режим</h1>
+    </header>
+    <section class="client-mode-placeholder">
+      <span class="client-mode-placeholder-icon" aria-hidden="true">⌕</span>
+      <h2>Клиентская часть в разработке</h2>
+      <p>Здесь появятся поиск жилья, просмотр домов и отправка запроса на бронирование.</p>
+      <button type="button" class="add-button" id="clientBackButton">Назад к выбору роли</button>
+    </section>
+  </main>
+  <main class="app hidden-page" id="todayPage">
     <header class="header">
       <div>
         <p class="date" id="todayDate"></p>
@@ -179,6 +211,8 @@ app.innerHTML = `
       </div>
     </header>
 
+    <section class="today-summary" id="todaySummary"></section>
+    <h2 class="section-title">Дома сегодня</h2>
     <section class="houses" id="houses"></section>
     <section class="upcoming-section">
   <div class="booking-tabs">
@@ -317,6 +351,13 @@ app.innerHTML = `
     </div>
   </div>
   <section class="backup-section">
+  <h2>Режим</h2>
+  <p>Сейчас вы используете приложение как предприниматель.</p>
+  <button class="backup-button secondary" id="businessModeChangeButton">
+    Сменить режим
+  </button>
+</section>
+  <section class="backup-section">
   <h2>Дома</h2>
   <p id="houseCountSetting">Количество домов: —</p>
   <div class="house-settings-actions">
@@ -342,7 +383,7 @@ app.innerHTML = `
   </div>
 </section>
 </main>
-  <nav class="bottom-nav">
+  <nav class="bottom-nav hidden-page">
   <button class="nav-button active" id="todayNav">
     <span>⌂</span>
     Сегодня
@@ -1069,6 +1110,12 @@ updateLanguageButtons()
 
   const todayPage =
     document.querySelector<HTMLElement>('#todayPage')!
+const roleSelectionPage =
+  document.querySelector<HTMLElement>('#roleSelectionPage')!
+const clientModePage =
+  document.querySelector<HTMLElement>('#clientModePage')!
+const bottomNav =
+  document.querySelector<HTMLElement>('.bottom-nav')!
 
 const calendarPage =
   document.querySelector<HTMLElement>('#calendarPage')!
@@ -1107,10 +1154,13 @@ function renderTodayDate() {
 renderTodayDate()
 
 function showTodayPage() {
+  roleSelectionPage.classList.add('hidden-page')
+  clientModePage.classList.add('hidden-page')
   todayPage.classList.remove('hidden-page')
   calendarPage.classList.add('hidden-page')
   searchPage.classList.add('hidden-page')
   settingsPage.classList.add('hidden-page')
+  bottomNav.classList.remove('hidden-page')
 
   todayNav.classList.add('active')
   calendarNav.classList.remove('active')
@@ -1119,10 +1169,13 @@ function showTodayPage() {
 }
 
 function showCalendarPage() {
+  roleSelectionPage.classList.add('hidden-page')
+  clientModePage.classList.add('hidden-page')
   todayPage.classList.add('hidden-page')
   calendarPage.classList.remove('hidden-page')
   searchPage.classList.add('hidden-page')
   settingsPage.classList.add('hidden-page')
+  bottomNav.classList.remove('hidden-page')
 
   todayNav.classList.remove('active')
   calendarNav.classList.add('active')
@@ -1133,10 +1186,13 @@ function showCalendarPage() {
 }
 
 function showSearchPage() {
+  roleSelectionPage.classList.add('hidden-page')
+  clientModePage.classList.add('hidden-page')
   todayPage.classList.add('hidden-page')
   calendarPage.classList.add('hidden-page')
   searchPage.classList.remove('hidden-page')
   settingsPage.classList.add('hidden-page')
+  bottomNav.classList.remove('hidden-page')
 
   todayNav.classList.remove('active')
   calendarNav.classList.remove('active')
@@ -1145,16 +1201,46 @@ function showSearchPage() {
 }
 
 function showSettingsPage() {
+  roleSelectionPage.classList.add('hidden-page')
+  clientModePage.classList.add('hidden-page')
   todayPage.classList.add('hidden-page')
   calendarPage.classList.add('hidden-page')
   searchPage.classList.add('hidden-page')
   settingsPage.classList.remove('hidden-page')
+  bottomNav.classList.remove('hidden-page')
 
   todayNav.classList.remove('active')
   calendarNav.classList.remove('active')
   searchNav.classList.remove('active')
   settingsNav.classList.add('active')
 }
+
+function showRoleSelection() {
+  roleSelectionPage.classList.remove('hidden-page')
+  clientModePage.classList.add('hidden-page')
+  todayPage.classList.add('hidden-page')
+  calendarPage.classList.add('hidden-page')
+  searchPage.classList.add('hidden-page')
+  settingsPage.classList.add('hidden-page')
+  bottomNav.classList.add('hidden-page')
+}
+
+function showClientMode() {
+  roleSelectionPage.classList.add('hidden-page')
+  clientModePage.classList.remove('hidden-page')
+  todayPage.classList.add('hidden-page')
+  calendarPage.classList.add('hidden-page')
+  searchPage.classList.add('hidden-page')
+  settingsPage.classList.add('hidden-page')
+  bottomNav.classList.add('hidden-page')
+}
+
+document
+  .querySelector<HTMLButtonElement>('#clientRoleButton')!
+  .addEventListener('click', showClientMode)
+document
+  .querySelector<HTMLButtonElement>('#clientBackButton')!
+  .addEventListener('click', showRoleSelection)
 
 todayNav.addEventListener('click', showTodayPage)
 calendarNav.addEventListener('click', showCalendarPage)
@@ -1684,6 +1770,7 @@ async function renderHouses() {
       .filter(
         (booking) =>
           booking.houseId === houseId &&
+          (booking.status ?? 'confirmed') !== 'expired' &&
           new Date(booking.startAt) < tomorrow &&
           new Date(booking.endAt) >= today,
       )
@@ -1754,7 +1841,7 @@ async function renderHouses() {
           </div>
 
           <strong class="guest-name">
-            ${currentBooking.guestName}
+            ${escapeHtml(currentBooking.guestName)}
           </strong>
 
           <span class="booking-time">
@@ -1808,8 +1895,115 @@ async function renderHouses() {
   }
 }
 
+function isSameCalendarDay(first: Date, second: Date): boolean {
+  return (
+    first.getFullYear() === second.getFullYear() &&
+    first.getMonth() === second.getMonth() &&
+    first.getDate() === second.getDate()
+  )
+}
+
+async function renderTodaySummary() {
+  const container =
+    document.querySelector<HTMLDivElement>('#todaySummary')!
+  const bookings = await getAllBookings()
+  const today = new Date()
+  const activeBookings = bookings.filter(
+    (booking) => (booking.status ?? 'confirmed') !== 'expired',
+  )
+  const arrivals = activeBookings
+    .filter((booking) => isSameCalendarDay(new Date(booking.startAt), today))
+    .sort(
+      (first, second) =>
+        new Date(first.startAt).getTime() -
+        new Date(second.startAt).getTime(),
+    )
+  const departures = activeBookings
+    .filter((booking) => isSameCalendarDay(new Date(booking.endAt), today))
+    .sort(
+      (first, second) =>
+        new Date(first.endAt).getTime() -
+        new Date(second.endAt).getTime(),
+    )
+  const startOfToday = new Date(today)
+  startOfToday.setHours(0, 0, 0, 0)
+  const pendingBookings = activeBookings
+    .filter(
+      (booking) =>
+        booking.status === 'pending' &&
+        new Date(booking.endAt) >= startOfToday,
+    )
+    .sort(
+      (first, second) =>
+        new Date(first.startAt).getTime() -
+        new Date(second.startAt).getTime(),
+    )
+
+  const renderList = (
+    items: Booking[],
+    emptyMessage: string,
+    timeField: 'startAt' | 'endAt',
+  ) =>
+    items.length === 0
+      ? `<p class="today-summary-empty">${emptyMessage}</p>`
+      : items
+          .map((booking) => {
+            const time = new Date(booking[timeField]).toLocaleTimeString(
+              getLanguageLocale(selectedLanguage),
+              { hour: '2-digit', minute: '2-digit' },
+            )
+            return `
+              <button
+                type="button"
+                class="today-summary-booking"
+                data-booking-id="${escapeHtml(booking.id)}"
+              >
+                <span class="today-summary-booking-main">
+                  <strong>${escapeHtml(getHouseName(booking.houseId))}</strong>
+                  <span>${escapeHtml(booking.guestName)}</span>
+                </span>
+                <span class="today-summary-time">${time}</span>
+              </button>
+            `
+          })
+          .join('')
+
+  container.innerHTML = `
+    <div class="today-summary-columns">
+      <section class="today-summary-panel">
+        <h2>Заезды</h2>
+        ${renderList(arrivals, 'Заездов сегодня нет', 'startAt')}
+      </section>
+      <section class="today-summary-panel">
+        <h2>Выезды</h2>
+        ${renderList(departures, 'Выездов сегодня нет', 'endAt')}
+      </section>
+    </div>
+    <section class="today-summary-panel today-pending-panel">
+      <h2>Предварительные брони</h2>
+      ${renderList(pendingBookings, 'Предварительных броней нет', 'startAt')}
+    </section>
+  `
+  translateDom(container)
+}
+
 const housesContainer =
   document.querySelector<HTMLDivElement>('#houses')!
+
+document
+  .querySelector<HTMLDivElement>('#todaySummary')!
+  .addEventListener('click', (event) => {
+    const target = event.target
+    if (!(target instanceof HTMLElement)) {
+      return
+    }
+    const bookingId = target.closest<HTMLButtonElement>(
+      '[data-booking-id]',
+    )?.dataset.bookingId
+    if (bookingId) {
+      void openBookingDetails(bookingId)
+    }
+  })
 
 function handleHouseActivation(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) {
@@ -2331,6 +2525,7 @@ clearSearchFiltersButton.addEventListener('click', () => {
 
 async function refreshBookingViews() {
   await Promise.all([
+    renderTodaySummary(),
     renderHouses(),
     renderUpcomingBookings(),
     renderCalendar(),
@@ -2992,6 +3187,27 @@ const houseNameInput =
   document.querySelector<HTMLInputElement>('#houseNameInput')!
 const saveHouseNameButton =
   document.querySelector<HTMLButtonElement>('#saveHouseName')!
+const businessRoleButton =
+  document.querySelector<HTMLButtonElement>('#businessRoleButton')!
+const clientRoleButton =
+  document.querySelector<HTMLButtonElement>('#clientRoleButton')!
+const businessModeChangeButton =
+  document.querySelector<HTMLButtonElement>('#businessModeChangeButton')!
+
+function enterBusinessMode() {
+  if (!appReady) {
+    return
+  }
+  if (configuredHouseCount === 0) {
+    pendingBusinessSetup = true
+    houseSetupModal.classList.remove('hidden')
+    return
+  }
+  showTodayPage()
+}
+
+businessRoleButton.addEventListener('click', enterBusinessMode)
+businessModeChangeButton.addEventListener('click', showRoleSelection)
 
 houseToRenameSelect.addEventListener('change', () => {
   houseNameInput.value = getHouseName(Number(houseToRenameSelect.value))
@@ -3042,6 +3258,10 @@ houseSetupForm.addEventListener('submit', async (event) => {
   updateHouseSettings()
   houseSetupModal.classList.add('hidden')
   await refreshBookingViews()
+  if (pendingBusinessSetup) {
+    pendingBusinessSetup = false
+    showTodayPage()
+  }
 })
 
 addHouseButton.addEventListener('click', async () => {
@@ -3128,7 +3348,9 @@ async function initializeHouseConfiguration() {
       configuredHouseCount = Math.max(3, maxExistingHouseId)
       await setHouseCount(configuredHouseCount)
     } else {
-      houseSetupModal.classList.remove('hidden')
+      appReady = true
+      businessRoleButton.disabled = false
+      clientRoleButton.disabled = false
       return
     }
   } else if (
@@ -3144,6 +3366,9 @@ async function initializeHouseConfiguration() {
   renderSearchHouseOptions()
   updateHouseSettings()
   await refreshBookingViews()
+  appReady = true
+  businessRoleButton.disabled = false
+  clientRoleButton.disabled = false
 }
 
 void initializeHouseConfiguration()
@@ -3153,6 +3378,7 @@ function refreshHouseOccupancyWhenVisible() {
     document.visibilityState === 'visible' &&
     configuredHouseCount > 0
   ) {
+    void renderTodaySummary()
     void renderHouses()
 
     if (bookingListMode === 'upcoming') {
