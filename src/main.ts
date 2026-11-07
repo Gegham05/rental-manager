@@ -1,5 +1,6 @@
 import './style.css'
 import { getBookingConflicts } from './services/bookingService'
+import { demoCatalog, type DemoProperty } from './data/demoCatalog'
 import {
   formatGuestCapacity,
   formatStayDuration,
@@ -10,12 +11,21 @@ import {
 } from './services/i18n'
 import { convertReceiptImageToPdf } from './services/receiptPdfService'
 import type { Booking } from './models/Booking'
+import type { GuestBookingRequest } from './models/GuestBookingRequest'
 import type { HouseProfile } from './models/HouseProfile'
 import type { Receipt } from './models/Receipt'
 import {
   addReceipt,
   createBooking,
+  createGuestBookingRequest,
+  getAllGuestBookingRequests,
+  getGuestBookingRequest,
+  acceptGuestBookingRequest,
+  rejectGuestBookingRequest,
+  deleteGuestBookingRequest,
+  deleteExpiredRejectedGuestBookingRequests,
   deleteReceipt,
+  expireCompletedTentativeBookings,
   getAllHouseProfiles,
   getAllBookings,
   getAllReceipts,
@@ -129,6 +139,94 @@ function isHouseProfile(value: unknown): value is HouseProfile {
   )
 }
 
+function isGuestBookingRequest(value: unknown): value is GuestBookingRequest {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const request = value as Record<string, unknown>
+  return (
+    typeof request.id === 'string' &&
+    request.source === 'local' &&
+    Number.isSafeInteger(request.houseId) &&
+    Number(request.houseId) > 0 &&
+    typeof request.propertyName === 'string' &&
+    typeof request.city === 'string' &&
+    typeof request.checkIn === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(request.checkIn) &&
+    typeof request.checkOut === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(request.checkOut) &&
+    typeof request.guestName === 'string' &&
+    typeof request.guestPhone === 'string' &&
+    Number.isSafeInteger(request.guestCount) &&
+    Number(request.guestCount) > 0 &&
+    typeof request.totalPrice === 'number' &&
+    Number.isFinite(request.totalPrice) &&
+    request.totalPrice >= 0 &&
+    (request.status === 'pending' ||
+      request.status === 'accepted' ||
+      request.status === 'rejected' ||
+      request.status === 'cancelled') &&
+    typeof request.createdAt === 'string' &&
+    !Number.isNaN(Date.parse(request.createdAt)) &&
+    typeof request.updatedAt === 'string' &&
+    !Number.isNaN(Date.parse(request.updatedAt)) &&
+    (request.bookingId === undefined || typeof request.bookingId === 'string')
+  )
+}
+
+function normalizeBackupBooking(value: unknown): Booking | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+
+  const booking = value as Record<string, unknown>
+  const status =
+    booking.status === undefined ? 'confirmed' : booking.status
+  const startAt =
+    typeof booking.startAt === 'string' ? Date.parse(booking.startAt) : NaN
+  const endAt =
+    typeof booking.endAt === 'string' ? Date.parse(booking.endAt) : NaN
+
+  if (
+    typeof booking.id !== 'string' ||
+    !booking.id ||
+    !Number.isSafeInteger(booking.houseId) ||
+    Number(booking.houseId) < 1 ||
+    (booking.rentalType !== 'overnight' && booking.rentalType !== 'day') ||
+    (status !== 'pending' &&
+      status !== 'confirmed' &&
+      status !== 'expired') ||
+    !Number.isFinite(startAt) ||
+    !Number.isFinite(endAt) ||
+    endAt <= startAt ||
+    typeof booking.guestName !== 'string' ||
+    typeof booking.guestPhone !== 'string' ||
+    !Number.isSafeInteger(booking.guestCount) ||
+    Number(booking.guestCount) < 1 ||
+    typeof booking.totalPrice !== 'number' ||
+    !Number.isFinite(booking.totalPrice) ||
+    booking.totalPrice < 0 ||
+    typeof booking.paidAmount !== 'number' ||
+    !Number.isFinite(booking.paidAmount) ||
+    booking.paidAmount < 0 ||
+    booking.paidAmount > booking.totalPrice ||
+    typeof booking.comment !== 'string' ||
+    typeof booking.createdAt !== 'string' ||
+    !Number.isFinite(Date.parse(booking.createdAt)) ||
+    typeof booking.updatedAt !== 'string' ||
+    !Number.isFinite(Date.parse(booking.updatedAt)) ||
+    (booking.guestRequestId !== undefined &&
+      typeof booking.guestRequestId !== 'string')
+  ) {
+    return null
+  }
+
+  return {
+    ...booking,
+    status,
+  } as Booking
+}
+
 function renderContactPhoneButton(phone: string): string {
   const escapedPhone = escapeHtml(phone)
   return `
@@ -234,6 +332,12 @@ app.innerHTML = `
       ></button>
     </header>
     <p class="client-mode-intro">Укажите место, даты и количество гостей, чтобы найти подходящее жильё.</p>
+    <p class="client-demo-notice">Демонстрационный макет: примеры жилья и заявки не связаны с реальными владельцами.</p>
+    <nav class="client-view-nav" aria-label="Разделы клиента">
+      <button type="button" class="client-view-tab active" data-client-view="search">Поиск</button>
+      <button type="button" class="client-view-tab" data-client-view="trips">Мои поездки</button>
+      <button type="button" class="client-view-tab" data-client-view="favorites">Избранное</button>
+    </nav>
     <form class="client-search-form" id="clientSearchForm">
       <label class="client-search-destination">
         Куда хотите поехать?
@@ -242,10 +346,12 @@ app.innerHTML = `
           id="clientDestination"
           name="destination"
           placeholder="Город или место"
+          list="armenianDestinations"
           autocomplete="off"
           required
         >
       </label>
+      <datalist id="armenianDestinations"></datalist>
       <div class="client-search-dates">
         <label>
           Заезд
@@ -265,7 +371,37 @@ app.innerHTML = `
         Найти жильё
       </button>
     </form>
+    <div class="client-search-filters" id="clientSearchFilters">
+      <label>Максимальная цена за ночь (֏)
+        <input type="number" id="clientMaxPrice" min="0" step="1000" inputmode="numeric" placeholder="Без ограничения">
+      </label>
+      <label>Удобство
+        <select id="clientAmenityFilter">
+          <option value="">Любые удобства</option>
+          <option value="wifi">Wi-Fi</option>
+          <option value="kitchen">Кухня</option>
+          <option value="parking">Парковка</option>
+          <option value="pool">Бассейн</option>
+          <option value="airConditioning">Кондиционер</option>
+          <option value="washingMachine">Стиральная машина</option>
+          <option value="view">Вид</option>
+        </select>
+      </label>
+      <button type="button" class="client-filters-clear" id="clearClientFilters">Сбросить фильтры</button>
+    </div>
+    <section class="client-destinations" aria-labelledby="clientDestinationsTitle">
+      <h2 id="clientDestinationsTitle">Популярные направления Армении</h2>
+      <div class="client-destination-chips">
+        <button type="button" data-client-destination="yerevan">Ереван</button>
+        <button type="button" data-client-destination="dilijan">Дилижан</button>
+        <button type="button" data-client-destination="sevan">Севан</button>
+        <button type="button" data-client-destination="tsaghkadzor">Цахкадзор</button>
+        <button type="button" data-client-destination="gyumri">Гюмри</button>
+        <button type="button" data-client-destination="jermuk">Джермук</button>
+      </div>
+    </section>
     <section class="client-search-results hidden-page" id="clientSearchResults" aria-live="polite"></section>
+    <section class="client-property-details hidden-page" id="clientPropertyDetails" aria-live="polite"></section>
     <button type="button" class="client-back-button" id="clientBackButton">Назад к выбору роли</button>
   </main>
   <main class="app hidden-page" id="todayPage">
@@ -289,6 +425,7 @@ app.innerHTML = `
       </div>
     </header>
 
+    <section class="guest-request-inbox" id="guestRequestInbox"></section>
     <section class="today-summary" id="todaySummary"></section>
     <h2 class="section-title">Дома сегодня</h2>
     <section class="houses" id="houses"></section>
@@ -388,29 +525,6 @@ app.innerHTML = `
     </button>
   </div>
   <div id="searchResults" class="search-results"></div>
-  <div id="searchResults" class="search-results"></div>
-  <section class="backup-section">
-  <h2>Резервная копия</h2>
-  <p>
-    Сохраните копию всех бронирований на устройство.
-  </p>
-  <p class="backup-status" id="backupStatus">
-    Последняя копия: —
-  </p>
-  <button class="backup-button" id="exportBackup">
-    Экспортировать данные
-  </button>
-  <button class="backup-button secondary" id="importBackup">
-  Импортировать данные
-</button>
-
-<input
-  type="file"
-  id="backupFile"
-  accept=".json,application/json"
-  hidden
-/>
-</section>
 </main>
   <main class="app hidden-page" id="settingsPage">
   <div class="settings-page-header">
@@ -429,7 +543,28 @@ app.innerHTML = `
     </div>
   </div>
   <section class="backup-section">
-  <h2>Режим</h2>
+    <h2>Резервная копия</h2>
+    <p>
+      Сохраните копию бронирований, заявок и настроек на устройство.
+    </p>
+    <p class="backup-status" id="backupStatus">
+      Последняя копия: —
+    </p>
+    <button class="backup-button" id="exportBackup">
+      Экспортировать данные
+    </button>
+    <button class="backup-button secondary" id="importBackup">
+      Импортировать данные
+    </button>
+    <input
+      type="file"
+      id="backupFile"
+      accept=".json,application/json"
+      hidden
+    />
+  </section>
+  <section class="backup-section">
+    <h2>Режим</h2>
   <p>Сейчас вы используете приложение как предприниматель.</p>
   <button class="backup-button secondary" id="businessModeChangeButton">
     Сменить режим
@@ -863,7 +998,7 @@ function translateTextNode(node: Text, allowPhraseTranslation = false) {
 }
 
 function translateElement(element: Element) {
-  const attributes = ['placeholder', 'title', 'aria-label']
+  const attributes = ['alt', 'placeholder', 'title', 'aria-label']
   let originals = originalAttributesByElement.get(element)
   if (!originals) {
     originals = new Map<
@@ -979,6 +1114,7 @@ async function changeLanguage(language: string) {
     throw new Error(`Unsupported interface language: ${language}`)
   }
 
+  const previousLanguage = selectedLanguage
   selectedLanguage = language
   await setAppLanguage(language)
   updateLanguageButtons()
@@ -986,7 +1122,27 @@ async function changeLanguage(language: string) {
   renderTodayDate()
   updateHouseSettings()
   renderSearchHouseOptions()
+  updateClientDestinationOptions()
+  const selectedDestination = clientDestinations.find(
+    (destination) =>
+      destination.names[previousLanguage] === clientDestination.value,
+  )
+  if (selectedDestination) {
+    clientDestination.value = selectedDestination.names[language]
+  }
+  await refreshPropertyProfileEditor()
   await refreshBookingViews()
+  const activeDetailId = currentClientDetailId
+  if (!clientModePage.classList.contains('hidden-page')) {
+    if (currentClientView === 'trips') {
+      await renderClientTrips()
+    } else if (currentClientView === 'favorites') {
+      await renderClientFavorites()
+    } else {
+      await renderClientSearchResults()
+    }
+    if (activeDetailId) await renderClientPropertyDetails(activeDetailId)
+  }
 }
 
 languageToggles.forEach((button) => {
@@ -1374,6 +1530,8 @@ function showClientMode() {
   searchPage.classList.add('hidden-page')
   settingsPage.classList.add('hidden-page')
   bottomNav.classList.add('hidden-page')
+  clientPropertyDetails.classList.add('hidden-page')
+  currentClientDetailId = null
   const today = new Date()
   const localToday = [
     today.getFullYear(),
@@ -1381,7 +1539,26 @@ function showClientMode() {
     String(today.getDate()).padStart(2, '0'),
   ].join('-')
   clientCheckIn.min = localToday
-  clientCheckOut.min = clientCheckIn.value || localToday
+  if (!clientCheckIn.value || clientCheckIn.value < localToday) {
+    const tomorrow = new Date(today)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    clientCheckIn.value = [
+      tomorrow.getFullYear(),
+      String(tomorrow.getMonth() + 1).padStart(2, '0'),
+      String(tomorrow.getDate()).padStart(2, '0'),
+    ].join('-')
+  }
+  clientCheckOut.min = clientCheckIn.value
+  if (!clientCheckOut.value || clientCheckOut.value <= clientCheckIn.value) {
+    const checkOut = new Date(`${clientCheckIn.value}T00:00:00`)
+    checkOut.setDate(checkOut.getDate() + 1)
+    clientCheckOut.value = [
+      checkOut.getFullYear(),
+      String(checkOut.getMonth() + 1).padStart(2, '0'),
+      String(checkOut.getDate()).padStart(2, '0'),
+    ].join('-')
+  }
+  showClientView('search')
 }
 
 document
@@ -1390,6 +1567,17 @@ document
 document
   .querySelector<HTMLButtonElement>('#clientBackButton')!
   .addEventListener('click', showRoleSelection)
+
+document
+  .querySelectorAll<HTMLButtonElement>('[data-client-view]')
+  .forEach((button) => {
+    button.addEventListener('click', () => {
+      const view = button.dataset.clientView
+      if (view === 'search' || view === 'trips' || view === 'favorites') {
+        showClientView(view)
+      }
+    })
+  })
 
 const clientSearchForm =
   document.querySelector<HTMLFormElement>('#clientSearchForm')!
@@ -1401,9 +1589,44 @@ const clientCheckOut =
   document.querySelector<HTMLInputElement>('#clientCheckOut')!
 const clientSearchResults =
   document.querySelector<HTMLElement>('#clientSearchResults')!
+const clientMaxPriceInput =
+  document.querySelector<HTMLInputElement>('#clientMaxPrice')!
+const clientAmenityFilter =
+  document.querySelector<HTMLSelectElement>('#clientAmenityFilter')!
 
 const clientGuestCount =
   document.querySelector<HTMLInputElement>('#clientGuestCount')!
+const clientPropertyDetails =
+  document.querySelector<HTMLElement>('#clientPropertyDetails')!
+const clientDestinations = [
+  { key: 'yerevan', names: { ru: 'Ереван', en: 'Yerevan', hy: 'Երևան' } },
+  { key: 'dilijan', names: { ru: 'Дилижан', en: 'Dilijan', hy: 'Դիլիջան' } },
+  { key: 'sevan', names: { ru: 'Севан', en: 'Sevan', hy: 'Սևան' } },
+  { key: 'tsaghkadzor', names: { ru: 'Цахкадзор', en: 'Tsaghkadzor', hy: 'Ծաղկաձոր' } },
+  { key: 'gyumri', names: { ru: 'Гюмри', en: 'Gyumri', hy: 'Գյումրի' } },
+  { key: 'jermuk', names: { ru: 'Джермук', en: 'Jermuk', hy: 'Ջերմուկ' } },
+]
+
+interface ClientListing {
+  id: string
+  source: 'demo' | 'local'
+  title: string
+  city: string
+  area: string
+  address: string
+  description: string
+  pricePerNight: number
+  maxGuests: number
+  bedrooms: number | null
+  rating: number | null
+  reviewCount: number
+  photoUrl: string | null
+  amenities: string[]
+  propertyType: string
+  hostName: string | null
+  searchTerms: string[]
+  unavailablePeriods: Array<{ start: string; end: string }>
+}
 
 const amenityLabels: Record<string, string> = {
   wifi: 'Wi-Fi',
@@ -1415,101 +1638,807 @@ const amenityLabels: Record<string, string> = {
   view: 'Вид',
 }
 
-async function renderClientSearchResults() {
-  const profiles = (await getAllHouseProfiles()).filter(
-    (profile) => profile.isPublished,
-  )
-  const bookings = await getAllBookings()
-  const destination = clientDestination.value.trim().toLocaleLowerCase()
-  const checkIn = new Date(`${clientCheckIn.value}T00:00:00`)
-  const checkOut = new Date(`${clientCheckOut.value}T00:00:00`)
-  const guestCount = Number(clientGuestCount.value)
-  const nights = Math.round(
-    (checkOut.getTime() - checkIn.getTime()) / (24 * 60 * 60 * 1000),
-  )
+function showClientView(view: 'search' | 'trips' | 'favorites') {
+  currentClientView = view
+  const searchForm = document.querySelector<HTMLElement>('#clientSearchForm')!
+  const searchFilters = document.querySelector<HTMLElement>('#clientSearchFilters')!
+  const destinations = document.querySelector<HTMLElement>('.client-destinations')!
+  searchForm.classList.toggle('hidden-page', view !== 'search')
+  searchFilters.classList.toggle('hidden-page', view !== 'search')
+  destinations.classList.toggle('hidden-page', view !== 'search')
+  document
+    .querySelectorAll<HTMLButtonElement>('[data-client-view]')
+    .forEach((button) => {
+      const active = button.dataset.clientView === view
+      button.classList.toggle('active', active)
+      button.setAttribute('aria-pressed', String(active))
+    })
+  currentClientDetailId = null
+  clientPropertyDetails.classList.add('hidden-page')
+  clientSearchResults.classList.remove('hidden-page')
+  if (view === 'trips') {
+    void renderClientTrips()
+  } else if (view === 'favorites') {
+    void renderClientFavorites()
+  } else {
+    void renderClientSearchResults()
+  }
+}
 
-  const availableProfiles = profiles.filter((profile) => {
+let currentClientListings: ClientListing[] = []
+let currentClientDetailId: string | null = null
+let clientStayNights = 1
+let clientSortOrder: 'recommended' | 'price-low' | 'rating' = 'recommended'
+let clientMaxPrice = ''
+let clientSelectedAmenity = ''
+let currentClientView: 'search' | 'trips' | 'favorites' = 'search'
+let clientInquiryDraft = { guestName: '', guestPhone: '', feedbackShown: false }
+const CLIENT_FAVORITES_STORAGE_KEY = 'clientFavoriteListingIds'
+
+function getClientFavoriteIds(): string[] {
+  const savedFavorites = localStorage.getItem(CLIENT_FAVORITES_STORAGE_KEY)
+  if (!savedFavorites) {
+    return []
+  }
+  try {
+    const parsed: unknown = JSON.parse(savedFavorites)
+    if (!Array.isArray(parsed) || !parsed.every((id) => typeof id === 'string')) {
+      throw new Error('Invalid saved favorites data')
+    }
+    return [...new Set(parsed)]
+  } catch (error) {
+    localStorage.removeItem(CLIENT_FAVORITES_STORAGE_KEY)
+    showToast('Не удалось прочитать список избранного.', 'error')
+    console.error('Failed to read saved client favorites:', error)
+    return []
+  }
+}
+
+function saveClientFavoriteIds(favorites: string[]) {
+  localStorage.setItem(CLIENT_FAVORITES_STORAGE_KEY, JSON.stringify(favorites))
+}
+
+function isClientFavorite(listingId: string): boolean {
+  return getClientFavoriteIds().includes(listingId)
+}
+
+function toggleClientFavorite(listingId: string): boolean {
+  const favorites = getClientFavoriteIds()
+  const alreadyFavorite = favorites.includes(listingId)
+  saveClientFavoriteIds(
+    alreadyFavorite
+      ? favorites.filter((id) => id !== listingId)
+      : [...favorites, listingId],
+  )
+  return !alreadyFavorite
+}
+
+function updateClientDestinationOptions() {
+  const datalist =
+    document.querySelector<HTMLDataListElement>('#armenianDestinations')
+  if (!datalist) {
+    return
+  }
+  datalist.innerHTML = clientDestinations
+    .map(
+      (destination) =>
+        `<option value="${destination.names[selectedLanguage]}"></option>`,
+    )
+    .join('')
+  document
+    .querySelectorAll<HTMLButtonElement>('[data-client-destination]')
+    .forEach((button) => {
+      const destination = clientDestinations.find(
+        (item) => item.key === button.dataset.clientDestination,
+      )
+      if (destination) {
+        button.textContent = destination.names[selectedLanguage]
+      }
+    })
+}
+
+function getDemoListing(property: DemoProperty): ClientListing {
+  return {
+    id: property.id,
+    source: 'demo',
+    title: property.name[selectedLanguage],
+    city: property.city[selectedLanguage],
+    area: property.area[selectedLanguage],
+    address: property.address[selectedLanguage],
+    description: property.description[selectedLanguage],
+    pricePerNight: property.pricePerNight,
+    maxGuests: property.maxGuests,
+    bedrooms: property.bedrooms,
+    rating: property.rating,
+    reviewCount: property.reviewCount,
+    photoUrl: property.photoUrl,
+    amenities: property.amenities,
+    propertyType: property.type[selectedLanguage],
+    hostName: null,
+    searchTerms: property.searchTerms,
+    unavailablePeriods: property.unavailablePeriods,
+  }
+}
+
+function getLocalListing(profile: HouseProfile): ClientListing | null {
+  if (!profile.isPublished || profile.pricePerNight === null) {
+    return null
+  }
+  const houseName = getHouseName(profile.houseId)
+  return {
+    id: `local-${profile.houseId}`,
+    source: 'local',
+    title: houseName,
+    city: profile.city,
+    area: '',
+    address: profile.address,
+    description: profile.description,
+    pricePerNight: profile.pricePerNight,
+    maxGuests: profile.maxGuests,
+    bedrooms: null,
+    rating: null,
+    reviewCount: 0,
+    photoUrl: profile.photoDataUrl?.startsWith('data:image/')
+      ? profile.photoDataUrl
+      : null,
+    amenities: profile.amenities,
+    propertyType: translateText('Ваш объект', selectedLanguage),
+    hostName: null,
+    searchTerms: [profile.city, profile.address],
+    unavailablePeriods: [],
+  }
+}
+
+async function getAllClientListings(): Promise<ClientListing[]> {
+  const profiles = await getAllHouseProfiles()
+  return [
+    ...demoCatalog.map(getDemoListing),
+    ...profiles
+      .map(getLocalListing)
+      .filter((listing): listing is ClientListing => listing !== null),
+  ]
+}
+
+function isListingAvailableForDates(
+  listing: ClientListing,
+  checkIn: string,
+  checkOut: string,
+): boolean {
+  return !listing.unavailablePeriods.some(
+    (period) => checkIn < period.end && checkOut > period.start,
+  )
+}
+
+function renderClientListingCard(
+  listing: ClientListing,
+  nights: number,
+): string {
+  const totalPrice = listing.pricePerNight * nights
+  const location = [listing.area, listing.city].filter(Boolean).join(', ')
+  const amenities = listing.amenities
+    .filter((amenity) => amenity in amenityLabels)
+    .slice(0, 4)
+    .map(
+      (amenity) =>
+        `<span class="client-property-chip">${translateText(amenityLabels[amenity], selectedLanguage)}</span>`,
+    )
+    .join('')
+  const rating = listing.rating === null
+    ? `<span class="client-rating-new">${translateText('Новый объект', selectedLanguage)}</span>`
+    : `<span class="client-rating-score">${listing.rating.toFixed(1)}</span><span class="client-rating-reviews">${listing.reviewCount} ${translateText('отзывов', selectedLanguage)}</span>`
+  const isFavorite = isClientFavorite(listing.id)
+
+  return `
+    <article class="client-property-card">
+      ${
+        listing.photoUrl
+          ? `<img class="client-property-photo" src="${escapeHtml(listing.photoUrl)}" alt="${escapeHtml(listing.title)}" loading="lazy">`
+          : '<div class="client-property-photo client-property-photo--empty" aria-hidden="true">⌂</div>'
+      }
+      <div class="client-property-content">
+        <div class="client-property-heading">
+          <div>
+            <span class="client-property-type">${escapeHtml(listing.propertyType)}</span>
+            <h3>${escapeHtml(listing.title)}</h3>
+            <p class="client-property-location">${escapeHtml(location)}${listing.address ? ` · ${escapeHtml(listing.address)}` : ''}</p>
+          </div>
+          <div class="client-property-rating">
+            ${rating}
+            <button type="button" class="client-favorite-button${isFavorite ? ' is-favorite' : ''}" data-favorite-listing="${escapeHtml(listing.id)}" aria-label="${translateText(isFavorite ? 'Убрать из избранного' : 'Добавить в избранное', selectedLanguage)}" aria-pressed="${isFavorite}">${isFavorite ? '♥' : '♡'}</button>
+          </div>
+        </div>
+        <p class="client-property-description">${escapeHtml(listing.description)}</p>
+        <div class="client-property-meta">
+          <span class="client-property-chip">${formatGuestCapacity(listing.maxGuests, selectedLanguage)}</span>
+          ${listing.bedrooms === null ? '' : `<span class="client-property-chip">${translateText('Спальни', selectedLanguage)}: ${listing.bedrooms}</span>`}
+          ${amenities}
+        </div>
+        <div class="client-property-card-footer">
+          <div>
+            <strong class="client-property-price">${totalPrice.toLocaleString(getLanguageLocale(selectedLanguage))} ֏</strong>
+            <span class="client-property-price-note">${translateText('за весь период', selectedLanguage)} · ${formatStayDuration(nights, selectedLanguage)}</span>
+          </div>
+          <button class="client-property-open" type="button" data-client-property="${escapeHtml(listing.id)}">${translateText('Посмотреть жильё', selectedLanguage)}</button>
+        </div>
+      </div>
+    </article>
+  `
+}
+
+async function renderClientTrips() {
+  await deleteExpiredRejectedGuestBookingRequests()
+  const requests = (await getAllGuestBookingRequests())
+    .sort(
+      (left, right) =>
+        new Date(right.createdAt).getTime() -
+        new Date(left.createdAt).getTime(),
+    )
+
+  if (requests.length === 0) {
+    clientSearchResults.innerHTML = `
+      <div class="client-library-header">
+        <h2>${translateText('Мои поездки', selectedLanguage)}</h2>
+        <p>${translateText('Здесь будут ваши заявки и их решения.', selectedLanguage)}</p>
+      </div>
+      <div class="client-search-empty">${translateText('У вас пока нет поездок и заявок.', selectedLanguage)}</div>
+    `
+  } else {
+    clientSearchResults.innerHTML = `
+      <div class="client-library-header">
+        <h2>${translateText('Мои поездки', selectedLanguage)}</h2>
+        <p>${translateText('Здесь будут ваши заявки и их решения.', selectedLanguage)}</p>
+      </div>
+      <div class="client-trip-list">
+        ${requests.map((request) => {
+          const statusMessage = request.status === 'accepted'
+            ? 'Заявка принята, бронь добавлена в календарь предпринимателя.'
+            : request.status === 'rejected'
+              ? 'Предприниматель отклонил заявку.'
+              : request.status === 'cancelled'
+                ? 'Предприниматель удалил подтверждённую бронь.'
+                : 'Заявка отправлена. Ожидайте ответа предпринимателя.'
+          const statusClass = request.status === 'accepted'
+            ? 'accepted'
+            : request.status === 'rejected'
+              ? 'rejected'
+              : request.status === 'cancelled'
+                ? 'cancelled'
+                : 'pending'
+          return `
+            <article class="client-trip-card">
+              <div class="client-trip-heading">
+                <div>
+                  <span class="client-property-type">${escapeHtml(request.city)}</span>
+                  <h3>${escapeHtml(request.propertyName)}</h3>
+                </div>
+                <span class="client-trip-status client-trip-status--${statusClass}">${translateText(statusMessage, selectedLanguage)}</span>
+              </div>
+              <div class="client-trip-details">
+                <span>${new Date(`${request.checkIn}T00:00:00`).toLocaleDateString(getLanguageLocale(selectedLanguage))} – ${new Date(`${request.checkOut}T00:00:00`).toLocaleDateString(getLanguageLocale(selectedLanguage))}</span>
+                <span>${formatGuestCapacity(request.guestCount, selectedLanguage)}</span>
+                <strong>${request.totalPrice.toLocaleString(getLanguageLocale(selectedLanguage))} ֏</strong>
+              </div>
+            </article>
+          `
+        }).join('')}
+      </div>
+    `
+  }
+  translateDom(clientSearchResults)
+}
+
+async function renderClientFavorites() {
+  const favoriteIds = new Set(getClientFavoriteIds())
+  const listings = (await getAllClientListings())
+    .filter((listing) => favoriteIds.has(listing.id))
+  currentClientListings = listings
+
+  clientSearchResults.innerHTML = listings.length === 0
+    ? `
+      <div class="client-library-header">
+        <h2>${translateText('Избранное', selectedLanguage)}</h2>
+        <p>${translateText('Сохраняйте понравившиеся варианты, чтобы быстро вернуться к ним.', selectedLanguage)}</p>
+      </div>
+      <div class="client-search-empty">${translateText('Пока нет избранных объектов. Добавьте их нажатием на сердечко.', selectedLanguage)}</div>
+    `
+    : `
+      <div class="client-library-header">
+        <h2>${translateText('Избранное', selectedLanguage)}</h2>
+        <p>${translateText('Сохраняйте понравившиеся варианты, чтобы быстро вернуться к ним.', selectedLanguage)}</p>
+      </div>
+      <div class="client-property-results">
+        ${listings.map((listing) => renderClientListingCard(listing, Math.max(1, clientStayNights))).join('')}
+      </div>
+    `
+  translateDom(clientSearchResults)
+}
+
+async function renderClientSearchResults() {
+  const destination = clientDestination.value.trim().toLocaleLowerCase()
+  if (!destination) {
+    clientSearchResults.innerHTML = `
+      <div class="client-search-empty">
+        ${translateText('Укажите город или место поездки.', selectedLanguage)}
+      </div>
+    `
+    clientPropertyDetails.classList.add('hidden-page')
+    clientSearchResults.classList.remove('hidden-page')
+    translateDom(clientSearchResults)
+    return
+  }
+  const bookings = await getAllBookings()
+  const checkIn = clientCheckIn.value
+  const checkOut = clientCheckOut.value
+  const guestCount = Number(clientGuestCount.value)
+  const maxPrice = Number(clientMaxPriceInput.value)
+  clientMaxPrice = clientMaxPriceInput.value
+  clientSelectedAmenity = clientAmenityFilter.value
+  clientStayNights = Math.round(
+    (new Date(`${checkOut}T00:00:00`).getTime() -
+      new Date(`${checkIn}T00:00:00`).getTime()) /
+      (24 * 60 * 60 * 1000),
+  )
+  const allListings = await getAllClientListings()
+  currentClientListings = allListings
+  const matchingListings = allListings.filter((listing) => {
+    const searchableText = [
+      listing.city,
+      listing.area,
+      listing.address,
+      ...listing.searchTerms,
+    ].join(' ').toLocaleLowerCase()
     if (
-      !`${profile.city} ${profile.address}`
-        .toLocaleLowerCase()
-        .includes(destination) ||
-      profile.maxGuests < guestCount ||
-      profile.pricePerNight === null
+      !searchableText.includes(destination) ||
+      listing.maxGuests < guestCount ||
+      (clientMaxPrice !== '' && listing.pricePerNight > maxPrice) ||
+      (clientSelectedAmenity !== '' &&
+        !listing.amenities.includes(clientSelectedAmenity)) ||
+      !isListingAvailableForDates(listing, checkIn, checkOut)
     ) {
       return false
     }
 
-    return !bookings.some((booking) => {
-      if (
-        booking.houseId !== profile.houseId ||
-        (booking.status ?? 'confirmed') !== 'confirmed'
-      ) {
-        return false
-      }
-      return (
-        checkIn < new Date(booking.endAt) &&
-        checkOut > new Date(booking.startAt)
-      )
-    })
+    if (listing.source === 'local') {
+      const houseId = Number(listing.id.slice('local-'.length))
+      return !bookings.some((booking) => {
+        if (
+          booking.houseId !== houseId ||
+          (booking.status ?? 'confirmed') !== 'confirmed'
+        ) {
+          return false
+        }
+        return (
+          new Date(`${checkIn}T00:00:00`) < new Date(booking.endAt) &&
+          new Date(`${checkOut}T00:00:00`) > new Date(booking.startAt)
+        )
+      })
+    }
+    return true
   })
 
-  if (availableProfiles.length === 0) {
+  const sortedListings = [...matchingListings].sort((left, right) => {
+    if (clientSortOrder === 'price-low') {
+      return left.pricePerNight - right.pricePerNight
+    }
+    if (clientSortOrder === 'rating') {
+      return (right.rating ?? 0) - (left.rating ?? 0)
+    }
+    return (right.rating ?? 0) - (left.rating ?? 0)
+  })
+
+  if (sortedListings.length === 0) {
     clientSearchResults.innerHTML = `
+      <div class="client-results-toolbar">
+        <h2 class="client-results-heading">${translateText('Найдены варианты', selectedLanguage)}: 0</h2>
+        <label class="client-sort-label">${translateText('Сортировка', selectedLanguage)}
+          <select id="clientSort">
+            <option value="recommended">${translateText('Сначала рекомендуемые', selectedLanguage)}</option>
+            <option value="price-low">${translateText('Сначала дешевле', selectedLanguage)}</option>
+            <option value="rating">${translateText('Сначала с высоким рейтингом', selectedLanguage)}</option>
+          </select>
+        </label>
+      </div>
       <div class="client-search-empty">
         ${translateText('На эти даты нет доступных объектов с указанной вместимостью.', selectedLanguage)}
       </div>
     `
   } else {
+    const demoResults = sortedListings.filter((listing) => listing.source === 'demo')
+    const localResults = sortedListings.filter((listing) => listing.source === 'local')
     clientSearchResults.innerHTML = `
-      <h2 class="client-results-heading">${translateText('Найдены варианты', selectedLanguage)}: ${availableProfiles.length}</h2>
-      ${availableProfiles
-        .map((profile) => {
-          const safePhoto =
-            profile.photoDataUrl?.startsWith('data:image/')
-              ? profile.photoDataUrl
-              : null
-          const price = profile.pricePerNight! * nights
-          const amenities = profile.amenities
-            .filter((amenity) => amenity in amenityLabels)
-            .map(
-              (amenity) =>
-                `<span class="client-property-chip">${translateText(amenityLabels[amenity], selectedLanguage)}</span>`,
-            )
-            .join('')
-          return `
-            <article class="client-property-card">
-              ${
-                safePhoto
-                  ? `<img class="client-property-photo" src="${safePhoto}" alt="${escapeHtml(getHouseName(profile.houseId))}">`
-                  : '<div class="client-property-photo" aria-hidden="true"></div>'
-              }
-              <div class="client-property-content">
-                <h3>${escapeHtml(getHouseName(profile.houseId))}</h3>
-                <p class="client-property-location">${escapeHtml(profile.city)}${profile.address ? ` · ${escapeHtml(profile.address)}` : ''}</p>
-                ${profile.description ? `<p class="client-property-description">${escapeHtml(profile.description)}</p>` : ''}
-                <div class="client-property-meta">
-                  <span class="client-property-chip">${formatGuestCapacity(profile.maxGuests, selectedLanguage)}</span>
-                  ${amenities}
-                </div>
-                <p class="client-property-price">${price.toLocaleString(getLanguageLocale(selectedLanguage))} ֏ · ${formatStayDuration(nights, selectedLanguage)}</p>
-              </div>
-            </article>
-          `
-        })
-        .join('')}
+      <div class="client-results-toolbar">
+        <div>
+          <h2 class="client-results-heading">${translateText('Найдены варианты', selectedLanguage)}: ${sortedListings.length}</h2>
+          <p>${translateText('Даты поездки', selectedLanguage)}: ${new Date(`${checkIn}T00:00:00`).toLocaleDateString(getLanguageLocale(selectedLanguage))} – ${new Date(`${checkOut}T00:00:00`).toLocaleDateString(getLanguageLocale(selectedLanguage))} · ${formatGuestCapacity(guestCount, selectedLanguage)}</p>
+        </div>
+        <label class="client-sort-label">${translateText('Сортировка', selectedLanguage)}
+          <select id="clientSort">
+            <option value="recommended">${translateText('Сначала рекомендуемые', selectedLanguage)}</option>
+            <option value="price-low">${translateText('Сначала дешевле', selectedLanguage)}</option>
+            <option value="rating">${translateText('Сначала с высоким рейтингом', selectedLanguage)}</option>
+          </select>
+        </label>
+      </div>
+      ${
+        demoResults.length
+          ? `<section class="client-result-group"><div class="client-result-group-heading"><h3>${translateText('Демонстрационный каталог', selectedLanguage)}</h3><span>${translateText('Примеры для макета', selectedLanguage)}</span></div><div class="client-property-results">${demoResults.map((listing) => renderClientListingCard(listing, clientStayNights)).join('')}</div></section>`
+          : ''
+      }
+      ${
+        localResults.length
+          ? `<section class="client-result-group"><div class="client-result-group-heading"><h3>${translateText('Ваши локальные объекты', selectedLanguage)}</h3><span>${translateText('Сохранены только в этом браузере', selectedLanguage)}</span></div><div class="client-property-results">${localResults.map((listing) => renderClientListingCard(listing, clientStayNights)).join('')}</div></section>`
+          : ''
+      }
     `
   }
 
+  const sortSelect =
+    clientSearchResults.querySelector<HTMLSelectElement>('#clientSort')
+  if (sortSelect) {
+    sortSelect.value = clientSortOrder
+    sortSelect.addEventListener('change', () => {
+      if (
+        sortSelect.value === 'recommended' ||
+        sortSelect.value === 'price-low' ||
+        sortSelect.value === 'rating'
+      ) {
+        clientSortOrder = sortSelect.value
+        void renderClientSearchResults()
+      }
+    })
+  }
+
+  clientPropertyDetails.classList.add('hidden-page')
   clientSearchResults.classList.remove('hidden-page')
   translateDom(clientSearchResults)
 }
+
+async function renderClientPropertyDetails(listingId: string) {
+  const listing = currentClientListings.find((item) => item.id === listingId)
+  if (!listing) {
+    return
+  }
+  if (currentClientDetailId !== listingId) {
+    clientInquiryDraft = { guestName: '', guestPhone: '', feedbackShown: false }
+  }
+  currentClientDetailId = listingId
+  const location = [listing.area, listing.city].filter(Boolean).join(', ')
+  const totalPrice = listing.pricePerNight * clientStayNights
+  const isFavorite = isClientFavorite(listing.id)
+  const amenities = listing.amenities
+    .filter((amenity) => amenity in amenityLabels)
+    .map(
+      (amenity) =>
+        `<span class="client-property-chip">${translateText(amenityLabels[amenity], selectedLanguage)}</span>`,
+    )
+    .join('')
+  const houseId = listing.source === 'local'
+    ? Number(listing.id.slice('local-'.length))
+    : null
+  const savedRequestId = localStorage.getItem('lastGuestBookingRequestId')
+  const savedRequest = houseId !== null && savedRequestId
+    ? await getGuestBookingRequest(savedRequestId)
+    : undefined
+  const matchingRequest =
+    savedRequest?.houseId === houseId &&
+    savedRequest.checkIn === clientCheckIn.value &&
+    savedRequest.checkOut === clientCheckOut.value
+      ? savedRequest
+      : undefined
+  const requestState = matchingRequest
+    ? translateText(
+        matchingRequest.status === 'accepted'
+          ? 'Заявка принята, бронь добавлена в календарь предпринимателя.'
+          : matchingRequest.status === 'rejected'
+            ? 'Предприниматель отклонил заявку.'
+            : matchingRequest.status === 'cancelled'
+              ? 'Предприниматель удалил подтверждённую бронь.'
+              : 'Заявка отправлена. Ожидайте ответа предпринимателя.',
+        selectedLanguage,
+      )
+    : ''
+  const requestForm = listing.source === 'local'
+    ? matchingRequest &&
+      matchingRequest.status !== 'rejected' &&
+      matchingRequest.status !== 'cancelled'
+      ? `<p class="client-request-state client-request-state--${matchingRequest.status}">${requestState}</p>`
+      : `
+        ${
+          matchingRequest?.status === 'cancelled'
+            ? `<p class="client-request-state client-request-state--cancelled">${requestState}</p>`
+            : ''
+        }
+        <form id="clientInquiryForm" class="client-inquiry-form">
+          <label>${translateText('Ваше имя', selectedLanguage)}<input name="guestName" autocomplete="name" required></label>
+          <label>${translateText('Телефон для связи', selectedLanguage)}<input name="guestPhone" type="tel" autocomplete="tel" required></label>
+          <button type="submit">${translateText('Отправить заявку', selectedLanguage)}</button>
+          <p class="client-panel-disclaimer">${translateText('Заявка сохранится только в этом браузере и будет видна предпринимателю на этом устройстве.', selectedLanguage)}</p>
+        </form>
+      `
+    : `<p class="client-panel-disclaimer">${translateText('Демонстрационный объект: у него нет реального владельца, поэтому заявку отправить нельзя.', selectedLanguage)}</p>`
+
+  clientSearchResults.classList.add('hidden-page')
+  clientPropertyDetails.innerHTML = `
+    <button class="client-detail-back" type="button" id="clientDetailBack">← ${translateText('Назад к вариантам', selectedLanguage)}</button>
+    <div class="client-detail-layout">
+      <div class="client-detail-main">
+        <div class="client-detail-cover">
+          ${
+            listing.photoUrl
+              ? `<img class="client-detail-photo" src="${escapeHtml(listing.photoUrl)}" alt="${escapeHtml(listing.title)}">`
+              : '<div class="client-detail-photo client-property-photo--empty" aria-hidden="true">⌂</div>'
+          }
+          <span class="client-detail-source">${translateText(listing.source === 'demo' ? 'Демонстрационный пример' : 'Ваш локальный объект', selectedLanguage)}</span>
+        </div>
+        <div class="client-detail-heading">
+          <div>
+            <span class="client-property-type">${escapeHtml(listing.propertyType)}</span>
+            <h2>${escapeHtml(listing.title)}</h2>
+            <p>${escapeHtml(location)}${listing.address ? ` · ${escapeHtml(listing.address)}` : ''}</p>
+          </div>
+          ${
+            listing.rating === null
+              ? `<span class="client-rating-new">${translateText('Пока без отзывов', selectedLanguage)}</span>`
+              : `<div class="client-property-rating"><span class="client-rating-score">${listing.rating.toFixed(1)}</span><span>${listing.reviewCount} ${translateText('отзывов', selectedLanguage)}</span></div>`
+          }
+          <button type="button" class="client-favorite-button client-detail-favorite${isFavorite ? ' is-favorite' : ''}" id="clientDetailFavorite" aria-label="${translateText(isFavorite ? 'Убрать из избранного' : 'Добавить в избранное', selectedLanguage)}" aria-pressed="${isFavorite}">${isFavorite ? '♥' : '♡'}</button>
+        </div>
+        <section class="client-detail-section">
+          <h3>${translateText('Об этом жилье', selectedLanguage)}</h3>
+          <p>${escapeHtml(listing.description)}</p>
+        </section>
+        <section class="client-detail-section client-reviews-section">
+          <h3>${translateText('Отзывы', selectedLanguage)}</h3>
+          ${
+            listing.rating === null
+              ? `<p>${translateText('Пока нет отзывов о жилье. Отзывы появятся после завершённых поездок.', selectedLanguage)}</p>`
+              : `<div class="client-review-summary"><strong>${listing.rating.toFixed(1)}</strong><span>${listing.reviewCount} ${translateText('отзывов', selectedLanguage)}</span></div><p>${translateText('Оценки в каталоге демонстрационные. Реальные отзывы появятся после завершённых бронирований.', selectedLanguage)}</p>`
+          }
+        </section>
+        <section class="client-detail-section">
+          <h3>${translateText('Удобства', selectedLanguage)}</h3>
+          <div class="client-property-meta">${amenities || `<span>${translateText('Информация об удобствах не добавлена', selectedLanguage)}</span>`}</div>
+        </section>
+        <section class="client-detail-section client-detail-facts">
+          <span>${formatGuestCapacity(listing.maxGuests, selectedLanguage)}</span>
+          ${listing.bedrooms === null ? '' : `<span>${translateText('Спальни', selectedLanguage)}: ${listing.bedrooms}</span>`}
+          <span>${translateText('Условия отмены нужно уточнить до бронирования', selectedLanguage)}</span>
+        </section>
+      </div>
+      <aside class="client-booking-panel">
+        <p class="client-panel-caption">${translateText('План поездки', selectedLanguage)}</p>
+        <p>${new Date(`${clientCheckIn.value}T00:00:00`).toLocaleDateString(getLanguageLocale(selectedLanguage))} – ${new Date(`${clientCheckOut.value}T00:00:00`).toLocaleDateString(getLanguageLocale(selectedLanguage))}</p>
+        <p>${formatGuestCapacity(Number(clientGuestCount.value), selectedLanguage)}</p>
+        <div class="client-panel-price"><strong>${totalPrice.toLocaleString(getLanguageLocale(selectedLanguage))} ֏</strong><span>${translateText('за весь период', selectedLanguage)}</span></div>
+        ${requestForm}
+      </aside>
+    </div>
+  `
+  const guestNameInput =
+    clientPropertyDetails.querySelector<HTMLInputElement>('[name="guestName"]')
+  const guestPhoneInput =
+    clientPropertyDetails.querySelector<HTMLInputElement>('[name="guestPhone"]')
+  if (guestNameInput) {
+    guestNameInput.value = clientInquiryDraft.guestName
+    guestNameInput.addEventListener('input', () => {
+      clientInquiryDraft.guestName = guestNameInput.value
+    })
+  }
+  if (guestPhoneInput) {
+    guestPhoneInput.value = clientInquiryDraft.guestPhone
+    guestPhoneInput.addEventListener('input', () => {
+      clientInquiryDraft.guestPhone = guestPhoneInput.value
+    })
+  }
+  clientPropertyDetails.classList.remove('hidden-page')
+  clientPropertyDetails
+    .querySelector<HTMLButtonElement>('#clientDetailBack')
+    ?.addEventListener('click', () => {
+      currentClientDetailId = null
+      clientPropertyDetails.classList.add('hidden-page')
+      clientSearchResults.classList.remove('hidden-page')
+      clientSearchResults.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  clientPropertyDetails
+    .querySelector<HTMLFormElement>('#clientInquiryForm')
+    ?.addEventListener('submit', async (event) => {
+      event.preventDefault()
+      const form = event.currentTarget
+      if (!(form instanceof HTMLFormElement) || !form.reportValidity()) {
+        return
+      }
+      if (houseId === null) {
+        return
+      }
+      const formData = new FormData(form)
+      const guestName = String(formData.get('guestName') ?? '').trim()
+      const guestPhone = String(formData.get('guestPhone') ?? '').trim()
+      if (!guestName || !guestPhone) {
+        return
+      }
+
+      const request: GuestBookingRequest = {
+        id: crypto.randomUUID(),
+        source: 'local',
+        houseId,
+        propertyName: listing.title,
+        city: listing.city,
+        checkIn: clientCheckIn.value,
+        checkOut: clientCheckOut.value,
+        guestName,
+        guestPhone,
+        guestCount: Number(clientGuestCount.value),
+        totalPrice,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }
+      await createGuestBookingRequest(request)
+      localStorage.setItem('lastGuestBookingRequestId', request.id)
+      clientInquiryDraft = { guestName, guestPhone, feedbackShown: false }
+      showToast('Заявка сохранена и отправлена предпринимателю.', 'success')
+      await renderClientPropertyDetails(listingId)
+    })
+  translateDom(clientPropertyDetails)
+}
+
+clientSearchResults.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element)) {
+    return
+  }
+  const favoriteButton =
+    target.closest<HTMLButtonElement>('[data-favorite-listing]')
+  const favoriteListingId = favoriteButton?.dataset.favoriteListing
+  if (favoriteListingId) {
+    const isFavorite = toggleClientFavorite(favoriteListingId)
+    showToast(
+      isFavorite
+        ? 'Объект добавлен в избранное.'
+        : 'Объект удалён из избранного.',
+      'success',
+    )
+    if (currentClientView === 'favorites') {
+      void renderClientFavorites()
+    } else {
+      void renderClientSearchResults()
+    }
+    return
+  }
+  const propertyButton =
+    target.closest<HTMLButtonElement>('[data-client-property]')
+  const listingId = propertyButton?.dataset.clientProperty
+  if (listingId) {
+    void renderClientPropertyDetails(listingId)
+    clientPropertyDetails.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+})
+
+clientPropertyDetails.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element)) {
+    return
+  }
+  const favoriteButton =
+    target.closest<HTMLButtonElement>('#clientDetailFavorite')
+  if (!favoriteButton || !currentClientDetailId) {
+    return
+  }
+  const isFavorite = toggleClientFavorite(currentClientDetailId)
+  showToast(
+    isFavorite
+      ? 'Объект добавлен в избранное.'
+      : 'Объект удалён из избранного.',
+    'success',
+  )
+  if (!isFavorite && currentClientView === 'favorites') {
+    currentClientDetailId = null
+    clientPropertyDetails.classList.add('hidden-page')
+    clientSearchResults.classList.remove('hidden-page')
+    void renderClientFavorites()
+    return
+  }
+  void renderClientPropertyDetails(currentClientDetailId)
+})
+
+async function refreshClientRequestStatus() {
+  if (clientModePage.classList.contains('hidden-page')) {
+    return
+  }
+  if (currentClientView === 'trips') {
+    await renderClientTrips()
+  } else if (currentClientView === 'favorites') {
+    await renderClientFavorites()
+  }
+  if (!currentClientDetailId) return
+  const requestId = localStorage.getItem('lastGuestBookingRequestId')
+  if (!requestId) {
+    return
+  }
+  const request = await getGuestBookingRequest(requestId)
+  if (request && request.status !== 'pending') {
+    await renderClientPropertyDetails(currentClientDetailId)
+  }
+}
+
+window.addEventListener('focus', () => {
+  void refreshClientRequestStatus()
+})
+
+document
+  .querySelectorAll<HTMLButtonElement>('[data-client-destination]')
+  .forEach((button) => {
+    button.addEventListener('click', () => {
+      const destination = clientDestinations.find(
+        (item) => item.key === button.dataset.clientDestination,
+      )
+      if (!destination) {
+        return
+      }
+      clientDestination.value = destination.names[selectedLanguage]
+      clientDestination.focus()
+      clientDestination.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  })
 
 clientCheckIn.addEventListener('change', () => {
   clientCheckOut.min = clientCheckIn.value || clientCheckIn.min
   if (clientCheckOut.value && clientCheckOut.value <= clientCheckIn.value) {
     clientCheckOut.value = ''
   }
+  scheduleClientSearch()
 })
+
+let clientFilterDebounce: number | undefined
+function scheduleClientSearch() {
+  window.clearTimeout(clientFilterDebounce)
+  clientFilterDebounce = window.setTimeout(() => {
+    if (
+      currentClientView === 'search' &&
+      clientDestination.value.trim() &&
+      clientSearchForm.checkValidity()
+    ) {
+      void renderClientSearchResults()
+    }
+  }, 250)
+}
+
+for (const input of [
+  clientDestination,
+  clientCheckIn,
+  clientCheckOut,
+  clientGuestCount,
+]) {
+  input.addEventListener('input', scheduleClientSearch)
+}
+
+clientMaxPriceInput.addEventListener('input', () => {
+  clientMaxPrice = clientMaxPriceInput.value
+  scheduleClientSearch()
+})
+
+clientAmenityFilter.addEventListener('change', () => {
+  clientSelectedAmenity = clientAmenityFilter.value
+  if (
+    currentClientView === 'search' &&
+    clientDestination.value.trim() &&
+    clientSearchForm.checkValidity()
+  ) {
+    void renderClientSearchResults()
+  }
+})
+
+document
+  .querySelector<HTMLButtonElement>('#clearClientFilters')!
+  .addEventListener('click', () => {
+    clientMaxPriceInput.value = ''
+    clientAmenityFilter.value = ''
+    clientMaxPrice = ''
+    clientSelectedAmenity = ''
+    if (clientDestination.value.trim() && clientSearchForm.checkValidity()) {
+      void renderClientSearchResults()
+    }
+  })
 
 clientSearchForm.addEventListener('submit', async (event) => {
   event.preventDefault()
@@ -1526,6 +2455,7 @@ clientSearchForm.addEventListener('submit', async (event) => {
     clientCheckOut.focus()
     return
   }
+  currentClientDetailId = null
   await renderClientSearchResults()
   clientSearchResults.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 })
@@ -2811,8 +3741,178 @@ clearSearchFiltersButton.addEventListener('click', () => {
   renderSearchResults('')
 })
 
+async function renderGuestRequestInbox() {
+  const inbox =
+    document.querySelector<HTMLElement>('#guestRequestInbox')!
+  await deleteExpiredRejectedGuestBookingRequests()
+  const requests = await getAllGuestBookingRequests()
+  const pendingRequests = requests
+    .filter((request) => request.status === 'pending')
+    .sort((left, right) =>
+      new Date(left.createdAt).getTime() -
+      new Date(right.createdAt).getTime(),
+    )
+  const rejectedRequests = requests
+    .filter((request) => request.status === 'rejected')
+    .sort((left, right) =>
+      new Date(left.checkIn).getTime() -
+      new Date(right.checkIn).getTime(),
+    )
+
+  if (pendingRequests.length === 0 && rejectedRequests.length === 0) {
+    inbox.innerHTML = ''
+    return
+  }
+
+  const renderRequestCard = (
+    request: GuestBookingRequest,
+    status: 'pending' | 'rejected',
+  ) => `
+    <article class="guest-request-card${status === 'rejected' ? ' guest-request-card--rejected' : ''}" data-guest-request="${escapeHtml(request.id)}">
+      <div class="guest-request-card-heading">
+        <div>
+          <span class="guest-request-property">${escapeHtml(request.propertyName)} · ${escapeHtml(getHouseName(request.houseId))}</span>
+          <h3>${escapeHtml(request.guestName)}</h3>
+        </div>
+        <span class="guest-request-status">${translateText(status === 'pending' ? 'Ожидает решения' : 'Отклонена', selectedLanguage)}</span>
+      </div>
+      <div class="guest-request-meta">
+        <span>${new Date(`${request.checkIn}T00:00:00`).toLocaleDateString(getLanguageLocale(selectedLanguage))} – ${new Date(`${request.checkOut}T00:00:00`).toLocaleDateString(getLanguageLocale(selectedLanguage))}</span>
+        <span>${formatGuestCapacity(request.guestCount, selectedLanguage)}</span>
+        <span>${request.totalPrice.toLocaleString(getLanguageLocale(selectedLanguage))} ֏</span>
+        ${renderContactPhoneButton(request.guestPhone)}
+      </div>
+      <div class="guest-request-actions">
+        ${
+          status === 'pending'
+            ? `<button type="button" class="guest-request-accept" data-accept-request="${escapeHtml(request.id)}">${translateText('Принять и добавить бронь', selectedLanguage)}</button>
+               <button type="button" class="guest-request-reject" data-reject-request="${escapeHtml(request.id)}">${translateText('Отклонить', selectedLanguage)}</button>`
+            : `<button type="button" class="guest-request-delete" data-delete-rejected-request="${escapeHtml(request.id)}">${translateText('Удалить заявку', selectedLanguage)}</button>`
+        }
+      </div>
+    </article>
+  `
+
+  inbox.innerHTML = `
+    ${
+      pendingRequests.length > 0
+        ? `<section class="guest-request-group">
+            <div class="guest-request-inbox-header">
+              <div>
+                <h2>${translateText('Заявки от клиентов', selectedLanguage)}</h2>
+                <p>${translateText('Новые заявки на объекты, сохранённые в этом браузере.', selectedLanguage)}</p>
+              </div>
+              <span class="guest-request-count">${pendingRequests.length}</span>
+            </div>
+            <div class="guest-request-list">
+              ${pendingRequests.map((request) => renderRequestCard(request, 'pending')).join('')}
+            </div>
+          </section>`
+        : ''
+    }
+    ${
+      rejectedRequests.length > 0
+        ? `<section class="guest-request-group guest-request-group--rejected">
+            <div class="guest-request-inbox-header">
+              <div>
+                <h2>${translateText('Отклонённые заявки', selectedLanguage)}</h2>
+                <p>${translateText('Отклонённые заявки хранятся до времени заезда и удаляются автоматически. Вы можете удалить их раньше.', selectedLanguage)}</p>
+              </div>
+              <span class="guest-request-count">${rejectedRequests.length}</span>
+            </div>
+            <div class="guest-request-list">
+              ${rejectedRequests.map((request) => renderRequestCard(request, 'rejected')).join('')}
+            </div>
+          </section>`
+        : ''
+    }
+  `
+  translateDom(inbox)
+}
+
+document
+  .querySelector<HTMLElement>('#guestRequestInbox')!
+  .addEventListener('click', async (event) => {
+    const target = event.target
+    if (!(target instanceof Element)) {
+      return
+    }
+
+    const acceptButton =
+      target.closest<HTMLButtonElement>('[data-accept-request]')
+    const requestId = acceptButton?.dataset.acceptRequest
+    if (requestId) {
+      const result = await acceptGuestBookingRequest(
+        requestId,
+        new Date().toISOString(),
+      )
+      if (result.status === 'conflict') {
+        const conflictDetails = result.conflicts
+          .map((booking) => {
+            const start = new Date(booking.startAt).toLocaleDateString(
+              getLanguageLocale(selectedLanguage),
+            )
+            const end = new Date(booking.endAt).toLocaleDateString(
+              getLanguageLocale(selectedLanguage),
+            )
+            return `${getHouseName(booking.houseId)}: ${start} – ${end} (${booking.guestName})`
+          })
+          .join('\n')
+        showToast(
+          `${translateText('Нельзя принять заявку: даты пересекаются с другой бронью.', selectedLanguage)}\n${conflictDetails}`,
+          'warning',
+        )
+        return
+      }
+      if (result.status !== 'accepted') {
+        showToast('Эта заявка уже обработана или удалена.')
+        await renderGuestRequestInbox()
+        return
+      }
+      await refreshBookingViews()
+      showToast('Заявка принята, бронь добавлена в календарь.', 'success')
+      return
+    }
+
+    const deleteButton =
+      target.closest<HTMLButtonElement>('[data-delete-rejected-request]')
+    const requestIdToDelete = deleteButton?.dataset.deleteRejectedRequest
+    if (requestIdToDelete) {
+      if (!confirm('Удалить отклонённую заявку?')) {
+        return
+      }
+      const deleted = await deleteGuestBookingRequest(requestIdToDelete)
+      if (!deleted) {
+        showToast('Эта заявка уже обработана или удалена.')
+      } else {
+        showToast('Отклонённая заявка удалена.', 'success')
+      }
+      await renderGuestRequestInbox()
+      return
+    }
+
+    const rejectButton =
+      target.closest<HTMLButtonElement>('[data-reject-request]')
+    const rejectedRequestId = rejectButton?.dataset.rejectRequest
+    if (!rejectedRequestId) {
+      return
+    }
+    const rejected = await rejectGuestBookingRequest(
+      rejectedRequestId,
+      new Date().toISOString(),
+    )
+    if (!rejected) {
+      showToast('Эта заявка уже обработана или удалена.')
+    } else {
+      showToast('Заявка отклонена.', 'success')
+    }
+    await renderGuestRequestInbox()
+  })
+
 async function refreshBookingViews() {
+  await expireCompletedTentativeBookings()
   await Promise.all([
+    renderGuestRequestInbox(),
     renderTodaySummary(),
     renderHouses(),
     renderUpcomingBookings(),
@@ -2891,54 +3991,57 @@ translateDom(backupStatus)
 renderBackupStatus()
 
 exportBackupButton.addEventListener('click', async () => {
-  const bookings = await getAllBookings()
-  const receipts = await getAllReceipts()
-  const houseProfiles = await getAllHouseProfiles()
+  try {
+    const bookings = await getAllBookings()
+    const receipts = await getAllReceipts()
+    const houseProfiles = await getAllHouseProfiles()
+    const guestRequests = await getAllGuestBookingRequests()
 
-  const backup = {
-    version: 2,
-    createdAt: new Date().toISOString(),
-    bookings,
-    houseProfiles,
-    receipts: await Promise.all(
-      receipts.map(async (receipt) => ({
-        id: receipt.id,
-        bookingId: receipt.bookingId,
-        fileName: receipt.fileName,
-        createdAt: receipt.createdAt,
-        dataUrl: await blobToDataUrl(receipt.pdf),
-      })),
-    ),
+    const backup = {
+      version: 4,
+      createdAt: new Date().toISOString(),
+      houseCount: configuredHouseCount,
+      houseNames: configuredHouseNames,
+      language: selectedLanguage,
+      bookings,
+      houseProfiles,
+      guestRequests,
+      receipts: await Promise.all(
+        receipts.map(async (receipt) => ({
+          id: receipt.id,
+          bookingId: receipt.bookingId,
+          fileName: receipt.fileName,
+          createdAt: receipt.createdAt,
+          dataUrl: await blobToDataUrl(receipt.pdf),
+        })),
+      ),
+    }
+
+    const blob = new Blob([JSON.stringify(backup, null, 2)], {
+      type: 'application/json',
+    })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `rental-manager-backup-${new Date()
+      .toISOString()
+      .slice(0, 10)}.json`
+
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+
+    localStorage.setItem('lastBackupAt', new Date().toISOString())
+    renderBackupStatus()
+  } catch (error) {
+    console.error('Не удалось создать резервную копию:', error)
+    showToast(
+      error instanceof Error
+        ? `Не удалось создать резервную копию: ${error.message}`
+        : 'Не удалось создать резервную копию.',
+    )
   }
-
-  const json = JSON.stringify(backup, null, 2)
-
-  const blob = new Blob([json], {
-    type: 'application/json',
-  })
-
-  const url = URL.createObjectURL(blob)
-
-  const link = document.createElement('a')
-  link.href = url
-
-  const date = new Date()
-    .toISOString()
-    .slice(0, 10)
-
-  link.download = `rental-manager-backup-${date}.json`
-
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-
-  URL.revokeObjectURL(url)
-
-  localStorage.setItem(
-  'lastBackupAt',
-  new Date().toISOString(),
-)
-  renderBackupStatus()
 })
 
 const importBackupButton =
@@ -2961,30 +4064,28 @@ backupFileInput.addEventListener('change', async () => {
 
   try {
     const text = await file.text()
-    const backup = JSON.parse(text)
+    const parsed: unknown = JSON.parse(text)
+
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('Файл резервной копии должен содержать объект.')
+    }
+    const backup = parsed as Record<string, unknown>
 
     if (
-      (backup.version !== 1 && backup.version !== 2) ||
+      ![1, 2, 3, 4].includes(Number(backup.version)) ||
       !Array.isArray(backup.bookings)
     ) {
-      alert('Это некорректный файл резервной копии.')
-      return
+      throw new Error('Это некорректный файл резервной копии.')
     }
 
-    const confirmed = confirm(
-      `Найдено бронирований: ${backup.bookings.length}.\n` +
-      `Квитанций: ${Array.isArray(backup.receipts) ? backup.receipts.length : 0}.\n\n` +
-      'Текущие данные будут заменены данными из резервной копии.\n\n' +
-      'Продолжить?',
-    )
-
-    if (!confirmed) {
-      return
+    const importedBookings = backup.bookings.map(normalizeBackupBooking)
+    if (importedBookings.some((booking) => booking === null)) {
+      throw new Error('В резервной копии найдена некорректная бронь.')
     }
-
-    const bookingIds = new Set(
-      backup.bookings.map((booking: Booking) => booking.id),
+    const bookings = importedBookings.filter(
+      (booking): booking is Booking => booking !== null,
     )
+    const bookingIds = new Set(bookings.map((booking) => booking.id))
     const importedReceipts: Receipt[] = []
     if (backup.receipts !== undefined && !Array.isArray(backup.receipts)) {
       throw new Error('Некорректный список квитанций в резервной копии.')
@@ -3022,48 +4123,109 @@ backupFileInput.addEventListener('change', async () => {
       importedHouseProfiles = backup.houseProfiles
     }
 
+    let importedGuestRequests: GuestBookingRequest[] = []
+    if (backup.guestRequests !== undefined) {
+      if (!Array.isArray(backup.guestRequests)) {
+        throw new Error('Некорректный список заявок в резервной копии.')
+      }
+      if (!backup.guestRequests.every(isGuestBookingRequest)) {
+        throw new Error('Некорректная заявка в резервной копии.')
+      }
+      importedGuestRequests = backup.guestRequests
+    }
+
+    const maxReferencedHouseId = Math.max(
+      1,
+      ...bookings.map((booking) => booking.houseId),
+      ...importedHouseProfiles.map((profile) => profile.houseId),
+      ...importedGuestRequests.map((request) => request.houseId),
+    )
+    let restoredHouseCount = Math.max(configuredHouseCount, maxReferencedHouseId)
+    let restoredHouseNames = Object.fromEntries(
+      Object.entries(configuredHouseNames).filter(
+        ([houseId]) => Number(houseId) <= restoredHouseCount,
+      ),
+    ) as Record<number, string>
+    let restoredLanguage = selectedLanguage
+
+    if (backup.version === 4) {
+      if (
+        !Number.isSafeInteger(backup.houseCount) ||
+        Number(backup.houseCount) < maxReferencedHouseId ||
+        !backup.houseNames ||
+        typeof backup.houseNames !== 'object' ||
+        Array.isArray(backup.houseNames) ||
+        (backup.language !== 'hy' &&
+          backup.language !== 'ru' &&
+          backup.language !== 'en')
+      ) {
+        throw new Error('Некорректные настройки в резервной копии.')
+      }
+
+      const houseNames: Record<number, string> = {}
+      for (const [houseId, name] of Object.entries(backup.houseNames)) {
+        const numericHouseId = Number(houseId)
+        if (
+          !Number.isSafeInteger(numericHouseId) ||
+          numericHouseId < 1 ||
+          numericHouseId > Number(backup.houseCount) ||
+          typeof name !== 'string'
+        ) {
+          throw new Error('Некорректное название дома в резервной копии.')
+        }
+        houseNames[numericHouseId] = name
+      }
+      restoredHouseCount = Number(backup.houseCount)
+      restoredHouseNames = houseNames
+      restoredLanguage = backup.language
+    }
+
+    const confirmed = confirm(
+      `Найдено бронирований: ${bookings.length}.\n` +
+      `Квитанций: ${importedReceipts.length}.\n\n` +
+      'Текущие данные будут заменены данными из резервной копии.\n\n' +
+      'Продолжить?',
+    )
+
+    if (!confirmed) {
+      return
+    }
+
     await replaceAllBookings(
-      backup.bookings,
+      bookings,
       importedReceipts,
       importedHouseProfiles,
+      importedGuestRequests,
+      {
+        houseCount: restoredHouseCount,
+        houseNames: restoredHouseNames,
+        language: restoredLanguage,
+      },
     )
 
-    const importedHouseCount = backup.bookings.reduce(
-      (maxHouseId: number, booking: Booking) =>
-        Number.isSafeInteger(booking.houseId) && booking.houseId > maxHouseId
-          ? booking.houseId
-          : maxHouseId,
-      configuredHouseCount,
-    )
-
-    if (importedHouseCount !== configuredHouseCount) {
-      configuredHouseCount = importedHouseCount
-      await setHouseCount(configuredHouseCount)
-      renderHouseOptions()
-      renderSearchHouseOptions()
-      updateHouseSettings()
-    }
-
-    if (importedHouseProfiles) {
-      const profileHouseCount = importedHouseProfiles.reduce(
-        (maximum, profile) => Math.max(maximum, profile.houseId),
-        0,
-      )
-      if (profileHouseCount > configuredHouseCount) {
-        configuredHouseCount = profileHouseCount
-        await setHouseCount(configuredHouseCount)
-        renderHouseOptions()
-        renderSearchHouseOptions()
-        updateHouseSettings()
-      }
-    }
+    configuredHouseCount = restoredHouseCount
+    configuredHouseNames = restoredHouseNames
+    selectedLanguage = restoredLanguage
+    updateLanguageButtons()
+    translateDom()
+    renderHouseOptions()
+    renderSearchHouseOptions()
+    updateHouseSettings()
+    renderTodayDate()
 
     await refreshBookingViews()
     await refreshPropertyProfileEditor()
 
     showToast('Резервная копия успешно восстановлена.', 'success')
-  } catch {
-    alert('Не удалось прочитать файл резервной копии.')
+  } catch (error) {
+    console.error('Не удалось восстановить резервную копию:', error)
+    showToast(
+      error instanceof Error
+        ? `Не удалось восстановить резервную копию: ${error.message}`
+        : 'Не удалось прочитать файл резервной копии.',
+    )
+  } finally {
+    backupFileInput.value = ''
   }
 })
 
@@ -3527,7 +4689,7 @@ const clientRoleButton =
 const businessModeChangeButton =
   document.querySelector<HTMLButtonElement>('#businessModeChangeButton')!
 
-function enterBusinessMode() {
+async function enterBusinessMode() {
   if (!appReady) {
     return
   }
@@ -3537,6 +4699,7 @@ function enterBusinessMode() {
     return
   }
   showTodayPage()
+  await refreshBookingViews()
 }
 
 businessRoleButton.addEventListener('click', enterBusinessMode)
@@ -3811,6 +4974,7 @@ async function initializeHouseConfiguration() {
   }
   updateLanguageButtons()
   translateDom()
+  updateClientDestinationOptions()
   renderTodayDate()
 
   const savedHouseCount = await getHouseCount()
@@ -3874,12 +5038,16 @@ function refreshHouseOccupancyWhenVisible() {
     document.visibilityState === 'visible' &&
     configuredHouseCount > 0
   ) {
-    void renderTodaySummary()
-    void renderHouses()
-
-    if (bookingListMode === 'upcoming') {
-      void renderUpcomingBookings('upcoming')
-    }
+    void expireCompletedTentativeBookings()
+      .then(async (expired) => {
+        if (expired) {
+          await refreshBookingViews()
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('Не удалось проверить сроки предварительных броней:', error)
+        showToast('Не удалось обновить статусы предварительных броней.')
+      })
   }
 }
 
@@ -4326,7 +5494,7 @@ form.addEventListener('submit', async (event) => {
 
     guestName: String(formData.get('guestName') ?? '').trim() || 'Без имени',
     guestPhone: String(formData.get('phone')),
-    guestCount: Number(formData.get('guestCount')) || 1,
+    guestCount: Number(formData.get('guestCount')),
 
     totalPrice,
     paidAmount: Number(formData.get('paid')),
@@ -4335,6 +5503,32 @@ form.addEventListener('submit', async (event) => {
 
     createdAt: now,
     updatedAt: now,
+  }
+
+  if (
+    !Number.isSafeInteger(booking.houseId) ||
+    booking.houseId < 1 ||
+    booking.houseId > configuredHouseCount
+  ) {
+    alert('Выберите существующий дом.')
+    return
+  }
+
+  if (
+    !Number.isSafeInteger(booking.guestCount) ||
+    booking.guestCount < 1
+  ) {
+    alert('Укажите корректное количество гостей.')
+    return
+  }
+
+  if (
+    !Number.isFinite(booking.paidAmount) ||
+    booking.paidAmount < 0 ||
+    booking.paidAmount > booking.totalPrice
+  ) {
+    alert('Предоплата должна быть от 0 до полной стоимости бронирования.')
+    return
   }
 
   if (

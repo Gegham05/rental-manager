@@ -1,15 +1,17 @@
 import { openDB } from 'idb'
 import type { AppLanguage } from '../services/i18n'
 import type { Booking } from '../models/Booking'
+import type { GuestBookingRequest } from '../models/GuestBookingRequest'
 import type { HouseProfile } from '../models/HouseProfile'
 import type { Receipt } from '../models/Receipt'
 
 const DB_NAME = 'rental-manager'
-const DB_VERSION = 4
+const DB_VERSION = 5
 const BOOKING_STORE = 'bookings'
 const SETTINGS_STORE = 'settings'
 const RECEIPT_STORE = 'receipts'
 const HOUSE_STORE = 'houses'
+const GUEST_REQUEST_STORE = 'guestRequests'
 
 const dbPromise = openDB(DB_NAME, DB_VERSION, {
   upgrade(db, oldVersion, _newVersion, transaction) {
@@ -36,6 +38,14 @@ const dbPromise = openDB(DB_NAME, DB_VERSION, {
       db.createObjectStore(HOUSE_STORE, {
         keyPath: 'houseId',
       })
+    }
+
+    if (!db.objectStoreNames.contains(GUEST_REQUEST_STORE)) {
+      const requestStore = db.createObjectStore(GUEST_REQUEST_STORE, {
+        keyPath: 'id',
+      })
+      requestStore.createIndex('houseId', 'houseId')
+      requestStore.createIndex('status', 'status')
     }
 
     if (oldVersion === 1) {
@@ -128,7 +138,13 @@ export async function removeHouseAndBookings(
 ): Promise<void> {
   const db = await dbPromise
   const transaction = db.transaction(
-    [BOOKING_STORE, SETTINGS_STORE, RECEIPT_STORE, HOUSE_STORE],
+    [
+      BOOKING_STORE,
+      SETTINGS_STORE,
+      RECEIPT_STORE,
+      HOUSE_STORE,
+      GUEST_REQUEST_STORE,
+    ],
     'readwrite',
   )
   const bookingStore = transaction.objectStore(BOOKING_STORE)
@@ -136,6 +152,7 @@ export async function removeHouseAndBookings(
     .objectStore(RECEIPT_STORE)
     .index('bookingId')
   const houseStore = transaction.objectStore(HOUSE_STORE)
+  const requestStore = transaction.objectStore(GUEST_REQUEST_STORE)
   let cursor = await bookingStore.openCursor()
 
   while (cursor) {
@@ -159,12 +176,27 @@ export async function removeHouseAndBookings(
     if (houseCursor.value.houseId === houseId) {
       await houseCursor.delete()
     } else if (houseCursor.value.houseId > houseId) {
-      await houseCursor.update({
+      const shiftedProfile = {
         ...houseCursor.value,
         houseId: houseCursor.value.houseId - 1,
-      })
+      }
+      await houseCursor.delete()
+      await houseStore.put(shiftedProfile)
     }
     houseCursor = await houseCursor.continue()
+  }
+
+  let requestCursor = await requestStore.openCursor()
+  while (requestCursor) {
+    if (requestCursor.value.houseId === houseId) {
+      await requestCursor.delete()
+    } else if (requestCursor.value.houseId > houseId) {
+      await requestCursor.update({
+        ...requestCursor.value,
+        houseId: requestCursor.value.houseId - 1,
+      })
+    }
+    requestCursor = await requestCursor.continue()
   }
 
   const settingsStore = transaction.objectStore(SETTINGS_STORE)
@@ -202,6 +234,35 @@ export async function getAllBookings(): Promise<Booking[]> {
   return db.getAll(BOOKING_STORE)
 }
 
+export async function expireCompletedTentativeBookings(
+  now: Date = new Date(),
+): Promise<boolean> {
+  const db = await dbPromise
+  const transaction = db.transaction(BOOKING_STORE, 'readwrite')
+  const store = transaction.objectStore(BOOKING_STORE)
+  let cursor = await store.openCursor()
+  let expiredAny = false
+
+  while (cursor) {
+    const booking = cursor.value as Booking
+    if (
+      booking.status === 'pending' &&
+      new Date(booking.endAt).getTime() <= now.getTime()
+    ) {
+      await cursor.update({
+        ...booking,
+        status: 'expired',
+        updatedAt: now.toISOString(),
+      })
+      expiredAny = true
+    }
+    cursor = await cursor.continue()
+  }
+
+  await transaction.done
+  return expiredAny
+}
+
 export async function getBooking(id: string): Promise<Booking | undefined> {
   const db = await dbPromise
   return db.get(BOOKING_STORE, id)
@@ -215,10 +276,28 @@ export async function updateBooking(booking: Booking): Promise<void> {
 export async function deleteBooking(id: string): Promise<void> {
   const db = await dbPromise
   const transaction = db.transaction(
-    [BOOKING_STORE, RECEIPT_STORE],
+    [BOOKING_STORE, RECEIPT_STORE, GUEST_REQUEST_STORE],
     'readwrite',
   )
-  await transaction.objectStore(BOOKING_STORE).delete(id)
+  const bookingStore = transaction.objectStore(BOOKING_STORE)
+  const requestStore = transaction.objectStore(GUEST_REQUEST_STORE)
+  const booking = await bookingStore.get(id) as Booking | undefined
+  await bookingStore.delete(id)
+  if (booking?.guestRequestId) {
+    const request = await requestStore.get(
+      booking.guestRequestId,
+    ) as GuestBookingRequest | undefined
+    if (
+      request?.status === 'accepted' &&
+      request.bookingId === booking.id
+    ) {
+      await requestStore.put({
+        ...request,
+        status: 'cancelled',
+        updatedAt: new Date().toISOString(),
+      })
+    }
+  }
   const receipts = await transaction
     .objectStore(RECEIPT_STORE)
     .index('bookingId')
@@ -263,6 +342,158 @@ export async function getAllHouseProfiles(): Promise<HouseProfile[]> {
   return db.getAll(HOUSE_STORE)
 }
 
+export async function createGuestBookingRequest(
+  request: GuestBookingRequest,
+): Promise<void> {
+  const db = await dbPromise
+  await db.add(GUEST_REQUEST_STORE, request)
+}
+
+export async function getGuestBookingRequest(
+  id: string,
+): Promise<GuestBookingRequest | undefined> {
+  const db = await dbPromise
+  return db.get(GUEST_REQUEST_STORE, id)
+}
+
+export async function getAllGuestBookingRequests(): Promise<GuestBookingRequest[]> {
+  const db = await dbPromise
+  return db.getAll(GUEST_REQUEST_STORE)
+}
+
+export async function deleteGuestBookingRequest(
+  requestId: string,
+): Promise<boolean> {
+  const db = await dbPromise
+  const transaction = db.transaction(GUEST_REQUEST_STORE, 'readwrite')
+  const store = transaction.objectStore(GUEST_REQUEST_STORE)
+  const request = await store.get(requestId) as GuestBookingRequest | undefined
+  if (!request || request.status !== 'rejected') {
+    await transaction.done
+    return false
+  }
+  await store.delete(requestId)
+  await transaction.done
+  return true
+}
+
+export async function deleteExpiredRejectedGuestBookingRequests(
+  now: Date = new Date(),
+): Promise<void> {
+  const db = await dbPromise
+  const transaction = db.transaction(GUEST_REQUEST_STORE, 'readwrite')
+  const store = transaction.objectStore(GUEST_REQUEST_STORE)
+  let cursor = await store.openCursor()
+
+  while (cursor) {
+    const request = cursor.value as GuestBookingRequest
+    if (
+      request.status === 'rejected' &&
+      new Date(`${request.checkIn}T14:00`).getTime() <= now.getTime()
+    ) {
+      await cursor.delete()
+    }
+    cursor = await cursor.continue()
+  }
+
+  await transaction.done
+}
+
+export async function rejectGuestBookingRequest(
+  requestId: string,
+  updatedAt: string,
+): Promise<boolean> {
+  const db = await dbPromise
+  const transaction = db.transaction(GUEST_REQUEST_STORE, 'readwrite')
+  const store = transaction.objectStore(GUEST_REQUEST_STORE)
+  const request = await store.get(requestId) as GuestBookingRequest | undefined
+  if (!request || request.status !== 'pending') {
+    await transaction.done
+    return false
+  }
+  await store.put({ ...request, status: 'rejected', updatedAt })
+  await transaction.done
+  return true
+}
+
+export type AcceptGuestBookingRequestResult =
+  | { status: 'accepted'; booking: Booking }
+  | { status: 'conflict'; conflicts: Booking[] }
+  | { status: 'not-found' | 'not-pending' }
+
+export async function acceptGuestBookingRequest(
+  requestId: string,
+  updatedAt: string,
+): Promise<AcceptGuestBookingRequestResult> {
+  const db = await dbPromise
+  const transaction = db.transaction(
+    [BOOKING_STORE, GUEST_REQUEST_STORE],
+    'readwrite',
+  )
+  const bookingStore = transaction.objectStore(BOOKING_STORE)
+  const requestStore = transaction.objectStore(GUEST_REQUEST_STORE)
+  const request = await requestStore.get(requestId) as
+    | GuestBookingRequest
+    | undefined
+
+  if (!request) {
+    await transaction.done
+    return { status: 'not-found' }
+  }
+  if (request.status !== 'pending') {
+    await transaction.done
+    return { status: 'not-pending' }
+  }
+
+  const bookings = await bookingStore.getAll()
+  const startAt = `${request.checkIn}T14:00`
+  const endAt = `${request.checkOut}T11:00`
+  const conflicts = bookings.filter((booking) => {
+    if (
+      booking.houseId !== request.houseId ||
+      booking.status === 'expired' ||
+      booking.id === request.bookingId
+    ) {
+      return false
+    }
+    return new Date(startAt) < new Date(booking.endAt) &&
+      new Date(endAt) > new Date(booking.startAt)
+  })
+
+  if (conflicts.length > 0) {
+    await transaction.done
+    return { status: 'conflict', conflicts }
+  }
+
+  const booking: Booking = {
+    id: crypto.randomUUID(),
+    guestRequestId: request.id,
+    houseId: request.houseId,
+    rentalType: 'overnight',
+    status: 'confirmed',
+    startAt,
+    endAt,
+    guestName: request.guestName,
+    guestPhone: request.guestPhone,
+    guestCount: request.guestCount,
+    totalPrice: request.totalPrice,
+    paidAmount: 0,
+    comment: 'Создано из заявки гостя.',
+    createdAt: updatedAt,
+    updatedAt,
+  }
+
+  await bookingStore.add(booking)
+  await requestStore.put({
+    ...request,
+    status: 'accepted',
+    updatedAt,
+    bookingId: booking.id,
+  })
+  await transaction.done
+  return { status: 'accepted', booking }
+}
+
 export async function saveHouseProfile(
   profile: HouseProfile,
 ): Promise<void> {
@@ -274,21 +505,36 @@ export async function replaceAllBookings(
   bookings: Booking[],
   receipts: Receipt[] = [],
   houseProfiles: HouseProfile[] = [],
+  guestRequests: GuestBookingRequest[] = [],
+  settings?: {
+    houseCount: number
+    houseNames: Record<number, string>
+    language: AppLanguage
+  },
 ): Promise<void> {
   const db = await dbPromise
 
   const transaction = db.transaction(
-    [BOOKING_STORE, RECEIPT_STORE, HOUSE_STORE],
+    [
+      BOOKING_STORE,
+      RECEIPT_STORE,
+      HOUSE_STORE,
+      GUEST_REQUEST_STORE,
+      SETTINGS_STORE,
+    ],
     'readwrite',
   )
 
   const bookingStore = transaction.objectStore(BOOKING_STORE)
   const receiptStore = transaction.objectStore(RECEIPT_STORE)
   const houseStore = transaction.objectStore(HOUSE_STORE)
+  const guestRequestStore = transaction.objectStore(GUEST_REQUEST_STORE)
+  const settingsStore = transaction.objectStore(SETTINGS_STORE)
 
   await bookingStore.clear()
   await receiptStore.clear()
   await houseStore.clear()
+  await guestRequestStore.clear()
 
   for (const booking of bookings) {
     await bookingStore.put(booking)
@@ -298,6 +544,23 @@ export async function replaceAllBookings(
   }
   for (const profile of houseProfiles) {
     await houseStore.put(profile)
+  }
+  for (const request of guestRequests) {
+    await guestRequestStore.put(request)
+  }
+  if (settings) {
+    await settingsStore.put({
+      key: 'houseCount',
+      value: settings.houseCount,
+    })
+    await settingsStore.put({
+      key: 'houseNames',
+      value: settings.houseNames,
+    })
+    await settingsStore.put({
+      key: 'language',
+      value: settings.language,
+    })
   }
 
   await transaction.done

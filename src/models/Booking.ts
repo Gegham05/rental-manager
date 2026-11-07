@@ -7,6 +7,7 @@ export type BookingStatus =
 
 export interface Booking {
   id: string
+  guestRequestId?: string
 
   houseId: number
   rentalType: RentalType
