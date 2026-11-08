@@ -2795,3 +2795,366 @@ body {
     transition: none;
   }
 }
+
+#statisticsPage {
+  width: min(100% - 32px, 1100px);
+  padding-bottom: 110px;
+}
+
+.statistics-header,
+.statistics-panel-heading,
+.statistics-flow,
+.statistics-legend-row,
+.expense-list-row {
+  display: flex;
+  align-items: center;
+}
+
+.statistics-header {
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 24px;
+}
+
+.statistics-month-label,
+.expense-form label {
+  display: grid;
+  gap: 7px;
+  color: #65656b;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.statistics-month-label input,
+.expense-form input,
+.expense-form select {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #dedee3;
+  border-radius: 11px;
+  background: #fff;
+  color: #1d1d1f;
+  font: inherit;
+}
+
+.statistics-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.statistics-kpi,
+.statistics-panel {
+  border: 1px solid #e8e8ed;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 4px 18px rgba(25, 30, 45, 0.045);
+}
+
+.statistics-kpi {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  min-height: 140px;
+  padding: 18px;
+}
+
+.statistics-kpi > span,
+.statistics-kpi small,
+.statistics-panel-heading p,
+.statistics-legend-row > span:nth-child(2) {
+  color: #74747c;
+  font-size: 13px;
+}
+
+.statistics-kpi > strong {
+  color: #202027;
+  font-size: clamp(20px, 2.8vw, 28px);
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.statistics-kpi small {
+  line-height: 1.4;
+}
+
+.statistics-kpi--income > strong,
+.statistics-kpi--net > strong {
+  color: #16794b;
+}
+
+.statistics-kpi--expense > strong,
+.statistics-kpi--negative > strong {
+  color: #c14949;
+}
+
+.statistics-kpi--occupancy > strong {
+  color: #4658bb;
+}
+
+.statistics-panel {
+  margin-bottom: 18px;
+  padding: 22px;
+}
+
+.statistics-panel-heading {
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.statistics-panel-heading h2 {
+  margin: 0 0 6px;
+  font-size: 19px;
+}
+
+.statistics-panel-heading p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.statistics-flow {
+  justify-content: center;
+  gap: clamp(28px, 8vw, 90px);
+  min-height: 220px;
+}
+
+.statistics-donut {
+  display: grid;
+  flex: 0 0 190px;
+  width: 190px;
+  aspect-ratio: 1;
+  place-items: center;
+  border-radius: 50%;
+  background: conic-gradient(
+    #3975dc 0 var(--statistics-income-share, 0%),
+    #e97c64 var(--statistics-income-share, 0%) 100%
+  );
+}
+
+.statistics-donut-center {
+  display: grid;
+  width: 68%;
+  aspect-ratio: 1;
+  align-content: center;
+  justify-items: center;
+  gap: 5px;
+  padding: 10px;
+  border-radius: 50%;
+  background: #fff;
+  text-align: center;
+}
+
+.statistics-donut-center strong {
+  max-width: 100%;
+  font-size: 19px;
+  overflow-wrap: anywhere;
+}
+
+.statistics-donut-center span {
+  color: #74747c;
+  font-size: 11px;
+}
+
+.statistics-legend {
+  display: grid;
+  gap: 16px;
+  min-width: min(100%, 260px);
+}
+
+.statistics-legend-row {
+  gap: 9px;
+}
+
+.statistics-legend-row strong {
+  margin-left: auto;
+  font-size: 13px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.statistics-legend-dot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border-radius: 50%;
+}
+
+.statistics-legend-dot--income {
+  background: #3975dc;
+}
+
+.statistics-legend-dot--expense {
+  background: #e97c64;
+}
+
+.expense-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: 14px;
+}
+
+.expense-form .expense-note-field {
+  grid-column: span 2;
+}
+
+.expense-form > button {
+  min-height: 44px;
+}
+
+.expense-list {
+  display: grid;
+  margin-top: 20px;
+}
+
+.expense-list-row {
+  gap: 12px;
+  min-height: 64px;
+  padding: 10px 2px;
+  border-top: 1px solid #eeeeF1;
+}
+
+.expense-list-row > div {
+  display: grid;
+  flex: 1;
+  gap: 5px;
+  min-width: 0;
+}
+
+.expense-list-row > div strong,
+.expense-list-amount {
+  font-size: 14px;
+}
+
+.expense-list-row > div span {
+  color: #74747c;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.expense-list-amount {
+  color: #c14949;
+  white-space: nowrap;
+}
+
+.expense-delete-button {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 9px;
+  background: #fff0ef;
+  color: #bd4343;
+  font-size: 21px;
+  cursor: pointer;
+}
+
+.expense-list-empty {
+  margin: 0;
+  padding: 16px 0 4px;
+  color: #74747c;
+  font-size: 14px;
+}
+
+.client-cancel-request {
+  min-height: 40px;
+  padding: 9px 13px;
+  border: 1px solid #e4a5a0;
+  border-radius: 10px;
+  background: #fff7f6;
+  color: #a63d37;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .statistics-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .expense-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .expense-form .expense-note-field {
+    grid-column: auto;
+  }
+
+  .bottom-nav {
+    width: calc(100% - 20px);
+    justify-content: space-between;
+    gap: 2px;
+    padding: 5px;
+  }
+
+  .nav-button {
+    min-width: 0;
+    flex: 1 1 0;
+    padding: 7px 3px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 500px) {
+  .statistics-header {
+    align-items: flex-start;
+  }
+
+  .statistics-month-label {
+    flex: 0 0 130px;
+  }
+
+  .statistics-month-label input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .statistics-kpi {
+    min-height: 125px;
+    padding: 14px;
+  }
+
+  .statistics-kpi > span,
+  .statistics-kpi small {
+    font-size: 12px;
+  }
+
+  .statistics-panel {
+    padding: 16px;
+  }
+
+  .statistics-flow {
+    flex-direction: column;
+    gap: 22px;
+    padding: 8px 0;
+  }
+
+  .statistics-donut {
+    flex-basis: 170px;
+    width: 170px;
+  }
+
+  .statistics-legend {
+    width: 100%;
+  }
+
+  .expense-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bottom-nav {
+    bottom: 8px;
+  }
+}
+
+@media (max-width: 380px) {
+  .nav-button {
+    font-size: 10px;
+  }
+
+  .nav-button span {
+    font-size: 17px;
+  }
+}

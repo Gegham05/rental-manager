@@ -3,6 +3,8 @@ export type GuestBookingRequestStatus =
   | 'accepted'
   | 'rejected'
   | 'cancelled'
+  | 'cancellation_requested'
+  | 'cancellation_rejected'
 
 export interface GuestBookingRequest {
   id: string

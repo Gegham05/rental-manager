@@ -4,14 +4,18 @@ import type { Booking } from '../models/Booking'
 import type { GuestBookingRequest } from '../models/GuestBookingRequest'
 import type { HouseProfile } from '../models/HouseProfile'
 import type { Receipt } from '../models/Receipt'
+import type { BookingPayment } from '../models/BookingPayment'
+import type { BusinessExpense } from '../models/BusinessExpense'
 
 const DB_NAME = 'rental-manager'
-const DB_VERSION = 5
+const DB_VERSION = 6
 const BOOKING_STORE = 'bookings'
 const SETTINGS_STORE = 'settings'
 const RECEIPT_STORE = 'receipts'
 const HOUSE_STORE = 'houses'
 const GUEST_REQUEST_STORE = 'guestRequests'
+const PAYMENT_STORE = 'payments'
+const EXPENSE_STORE = 'expenses'
 
 const dbPromise = openDB(DB_NAME, DB_VERSION, {
   upgrade(db, oldVersion, _newVersion, transaction) {
@@ -20,7 +24,6 @@ const dbPromise = openDB(DB_NAME, DB_VERSION, {
         keyPath: 'id',
       })
     }
-
     if (!db.objectStoreNames.contains(SETTINGS_STORE)) {
       db.createObjectStore(SETTINGS_STORE, {
         keyPath: 'key',
@@ -46,6 +49,21 @@ const dbPromise = openDB(DB_NAME, DB_VERSION, {
       })
       requestStore.createIndex('houseId', 'houseId')
       requestStore.createIndex('status', 'status')
+    }
+
+    if (!db.objectStoreNames.contains(PAYMENT_STORE)) {
+      const paymentStore = db.createObjectStore(PAYMENT_STORE, {
+        keyPath: 'id',
+      })
+      paymentStore.createIndex('bookingId', 'bookingId')
+      paymentStore.createIndex('paidAt', 'paidAt')
+    }
+
+    if (!db.objectStoreNames.contains(EXPENSE_STORE)) {
+      const expenseStore = db.createObjectStore(EXPENSE_STORE, {
+        keyPath: 'id',
+      })
+      expenseStore.createIndex('date', 'date')
     }
 
     if (oldVersion === 1) {
@@ -144,6 +162,7 @@ export async function removeHouseAndBookings(
       RECEIPT_STORE,
       HOUSE_STORE,
       GUEST_REQUEST_STORE,
+      PAYMENT_STORE,
     ],
     'readwrite',
   )
@@ -226,7 +245,20 @@ export async function removeHouseAndBookings(
 
 export async function createBooking(booking: Booking): Promise<void> {
   const db = await dbPromise
-  await db.add(BOOKING_STORE, booking)
+  const transaction = db.transaction(
+    [BOOKING_STORE, PAYMENT_STORE],
+    'readwrite',
+  )
+  await transaction.objectStore(BOOKING_STORE).add(booking)
+  if (booking.paidAmount > 0) {
+    await transaction.objectStore(PAYMENT_STORE).add({
+      id: crypto.randomUUID(),
+      bookingId: booking.id,
+      amount: booking.paidAmount,
+      paidAt: booking.createdAt,
+    } satisfies BookingPayment)
+  }
+  await transaction.done
 }
 
 export async function getAllBookings(): Promise<Booking[]> {
@@ -270,7 +302,31 @@ export async function getBooking(id: string): Promise<Booking | undefined> {
 
 export async function updateBooking(booking: Booking): Promise<void> {
   const db = await dbPromise
-  await db.put(BOOKING_STORE, booking)
+  const transaction = db.transaction(
+    [BOOKING_STORE, PAYMENT_STORE],
+    'readwrite',
+  )
+  const bookingStore = transaction.objectStore(BOOKING_STORE)
+  const paymentStore = transaction.objectStore(PAYMENT_STORE)
+  const existing = await bookingStore.get(booking.id) as Booking | undefined
+  if (!existing) {
+    throw new Error(`Booking not found: ${booking.id}`)
+  }
+  const payments = await paymentStore
+    .index('bookingId')
+    .getAll(booking.id) as BookingPayment[]
+  const ledgerTotal = payments.reduce((total, payment) => total + payment.amount, 0)
+  const difference = booking.paidAmount - ledgerTotal
+  if (difference !== 0) {
+    await paymentStore.add({
+      id: crypto.randomUUID(),
+      bookingId: booking.id,
+      amount: difference,
+      paidAt: booking.updatedAt,
+    } satisfies BookingPayment)
+  }
+  await bookingStore.put(booking)
+  await transaction.done
 }
 
 export async function deleteBooking(id: string): Promise<void> {
@@ -288,7 +344,9 @@ export async function deleteBooking(id: string): Promise<void> {
       booking.guestRequestId,
     ) as GuestBookingRequest | undefined
     if (
-      request?.status === 'accepted' &&
+      (request?.status === 'accepted' ||
+        request?.status === 'cancellation_requested' ||
+        request?.status === 'cancellation_rejected') &&
       request.bookingId === booking.id
     ) {
       await requestStore.put({
@@ -305,6 +363,133 @@ export async function deleteBooking(id: string): Promise<void> {
   for (const receiptId of receipts) {
     await transaction.objectStore(RECEIPT_STORE).delete(receiptId)
   }
+  await transaction.done
+}
+
+export async function getAllBookingPayments(): Promise<BookingPayment[]> {
+  const db = await dbPromise
+  return db.getAll(PAYMENT_STORE)
+}
+
+export async function recordBookingPayment(
+  bookingId: string,
+  amount: number,
+  paidAt: string,
+): Promise<
+  | { status: 'recorded'; booking: Booking }
+  | { status: 'not-found' | 'invalid-amount' | 'overpayment' | 'conflict' }
+> {
+  const db = await dbPromise
+  const transaction = db.transaction(
+    [BOOKING_STORE, PAYMENT_STORE],
+    'readwrite',
+  )
+  const bookingStore = transaction.objectStore(BOOKING_STORE)
+  const paymentStore = transaction.objectStore(PAYMENT_STORE)
+  const booking = await bookingStore.get(bookingId) as Booking | undefined
+
+  if (!booking) {
+    await transaction.done
+    return { status: 'not-found' }
+  }
+  if (!Number.isFinite(amount) || amount <= 0) {
+    await transaction.done
+    return { status: 'invalid-amount' }
+  }
+  if (amount > booking.totalPrice - booking.paidAmount) {
+    await transaction.done
+    return { status: 'overpayment' }
+  }
+
+  const updatedBooking: Booking = {
+    ...booking,
+    paidAmount: booking.paidAmount + amount,
+    updatedAt: paidAt,
+    status:
+      booking.status === 'pending' && amount > 0
+        ? 'confirmed'
+        : booking.status,
+  }
+  if (
+    booking.status === 'pending' &&
+    updatedBooking.status === 'confirmed'
+  ) {
+    const bookings = await bookingStore.getAll()
+    const start = new Date(booking.startAt).getTime()
+    const end = new Date(booking.endAt).getTime()
+    const conflicts = bookings.some((other) =>
+      other.id !== booking.id &&
+      other.houseId === booking.houseId &&
+      (other.status ?? 'confirmed') === 'confirmed' &&
+      start < new Date(other.endAt).getTime() &&
+      end > new Date(other.startAt).getTime(),
+    )
+    if (conflicts) {
+      await transaction.done
+      return { status: 'conflict' }
+    }
+  }
+  await bookingStore.put(updatedBooking)
+  await paymentStore.add({
+    id: crypto.randomUUID(),
+    bookingId,
+    amount,
+    paidAt,
+  } satisfies BookingPayment)
+  await transaction.done
+  return { status: 'recorded', booking: updatedBooking }
+}
+
+export async function addBusinessExpense(
+  expense: BusinessExpense,
+): Promise<void> {
+  const db = await dbPromise
+  await db.add(EXPENSE_STORE, expense)
+}
+
+export async function getAllBusinessExpenses(): Promise<BusinessExpense[]> {
+  const db = await dbPromise
+  return db.getAll(EXPENSE_STORE)
+}
+
+export async function deleteBusinessExpense(id: string): Promise<void> {
+  const db = await dbPromise
+  await db.delete(EXPENSE_STORE, id)
+}
+
+export async function migrateLegacyBookingPayments(): Promise<void> {
+  const db = await dbPromise
+  const transaction = db.transaction(
+    [BOOKING_STORE, PAYMENT_STORE, SETTINGS_STORE],
+    'readwrite',
+  )
+  const settings = transaction.objectStore(SETTINGS_STORE)
+  const migration = await settings.get('legacyPaymentLedgerMigrated')
+  if (migration?.value === true) {
+    await transaction.done
+    return
+  }
+
+  const bookingStore = transaction.objectStore(BOOKING_STORE)
+  const paymentStore = transaction.objectStore(PAYMENT_STORE)
+  let cursor = await bookingStore.openCursor()
+  while (cursor) {
+    const booking = cursor.value as Booking
+    const existing = await paymentStore
+      .index('bookingId')
+      .getAll(booking.id) as BookingPayment[]
+    if (booking.paidAmount > 0 && existing.length === 0) {
+      await paymentStore.add({
+        id: `legacy-${booking.id}`,
+        bookingId: booking.id,
+        amount: booking.paidAmount,
+        paidAt: booking.updatedAt || booking.createdAt,
+        legacy: true,
+      } satisfies BookingPayment)
+    }
+    cursor = await cursor.continue()
+  }
+  await settings.put({ key: 'legacyPaymentLedgerMigrated', value: true })
   await transaction.done
 }
 
@@ -395,8 +580,85 @@ export async function deleteExpiredRejectedGuestBookingRequests(
     }
     cursor = await cursor.continue()
   }
-
   await transaction.done
+}
+
+export async function requestGuestBookingCancellation(
+  requestId: string,
+  updatedAt: string,
+): Promise<boolean> {
+  const db = await dbPromise
+  const transaction = db.transaction(GUEST_REQUEST_STORE, 'readwrite')
+  const store = transaction.objectStore(GUEST_REQUEST_STORE)
+  const request = await store.get(requestId) as GuestBookingRequest | undefined
+  if (
+    !request ||
+    (request.status !== 'accepted' &&
+      request.status !== 'cancellation_rejected')
+  ) {
+    await transaction.done
+    return false
+  }
+  await store.put({
+    ...request,
+    status: 'cancellation_requested',
+    updatedAt,
+  })
+  await transaction.done
+  return true
+}
+
+export async function resolveGuestBookingCancellation(
+  requestId: string,
+  approve: boolean,
+  updatedAt: string,
+): Promise<boolean> {
+  const db = await dbPromise
+  const transaction = db.transaction(
+    [BOOKING_STORE, RECEIPT_STORE, PAYMENT_STORE, GUEST_REQUEST_STORE],
+    'readwrite',
+  )
+  const requestStore = transaction.objectStore(GUEST_REQUEST_STORE)
+  const request = await requestStore.get(requestId) as GuestBookingRequest | undefined
+  if (!request || request.status !== 'cancellation_requested') {
+    await transaction.done
+    return false
+  }
+
+  if (!approve) {
+    await requestStore.put({
+      ...request,
+      status: 'cancellation_rejected',
+      updatedAt,
+    })
+    await transaction.done
+    return true
+  }
+
+  const bookingStore = transaction.objectStore(BOOKING_STORE)
+  const booking = request.bookingId
+    ? await bookingStore.get(request.bookingId) as Booking | undefined
+    : undefined
+  if (!booking || booking.guestRequestId !== request.id) {
+    await transaction.done
+    return false
+  }
+
+  const receiptIds = await transaction
+    .objectStore(RECEIPT_STORE)
+    .index('bookingId')
+    .getAllKeys(booking.id)
+  for (const receiptId of receiptIds) {
+    await transaction.objectStore(RECEIPT_STORE).delete(receiptId)
+  }
+  await bookingStore.delete(booking.id)
+  await requestStore.put({
+    ...request,
+    status: 'cancelled',
+    updatedAt,
+  })
+  await transaction.done
+  return true
 }
 
 export async function rejectGuestBookingRequest(
@@ -511,6 +773,8 @@ export async function replaceAllBookings(
     houseNames: Record<number, string>
     language: AppLanguage
   },
+  payments: BookingPayment[] = [],
+  expenses: BusinessExpense[] = [],
 ): Promise<void> {
   const db = await dbPromise
 
@@ -521,6 +785,8 @@ export async function replaceAllBookings(
       HOUSE_STORE,
       GUEST_REQUEST_STORE,
       SETTINGS_STORE,
+      PAYMENT_STORE,
+      EXPENSE_STORE,
     ],
     'readwrite',
   )
@@ -530,11 +796,15 @@ export async function replaceAllBookings(
   const houseStore = transaction.objectStore(HOUSE_STORE)
   const guestRequestStore = transaction.objectStore(GUEST_REQUEST_STORE)
   const settingsStore = transaction.objectStore(SETTINGS_STORE)
+  const paymentStore = transaction.objectStore(PAYMENT_STORE)
+  const expenseStore = transaction.objectStore(EXPENSE_STORE)
 
   await bookingStore.clear()
   await receiptStore.clear()
   await houseStore.clear()
   await guestRequestStore.clear()
+  await paymentStore.clear()
+  await expenseStore.clear()
 
   for (const booking of bookings) {
     await bookingStore.put(booking)
@@ -547,6 +817,26 @@ export async function replaceAllBookings(
   }
   for (const request of guestRequests) {
     await guestRequestStore.put(request)
+  }
+  for (const payment of payments) {
+    await paymentStore.put(payment)
+  }
+  for (const expense of expenses) {
+    await expenseStore.put(expense)
+  }
+  const paymentBookingIds = new Set(
+    payments.map((payment) => payment.bookingId),
+  )
+  for (const booking of bookings) {
+    if (booking.paidAmount > 0 && !paymentBookingIds.has(booking.id)) {
+      await paymentStore.put({
+        id: `legacy-${booking.id}`,
+        bookingId: booking.id,
+        amount: booking.paidAmount,
+        paidAt: booking.updatedAt || booking.createdAt,
+        legacy: true,
+      } satisfies BookingPayment)
+    }
   }
   if (settings) {
     await settingsStore.put({

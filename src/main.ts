@@ -14,8 +14,14 @@ import type { Booking } from './models/Booking'
 import type { GuestBookingRequest } from './models/GuestBookingRequest'
 import type { HouseProfile } from './models/HouseProfile'
 import type { Receipt } from './models/Receipt'
+import type { BookingPayment } from './models/BookingPayment'
+import type {
+  BusinessExpense,
+  BusinessExpenseCategory,
+} from './models/BusinessExpense'
 import {
   addReceipt,
+  addBusinessExpense,
   createBooking,
   createGuestBookingRequest,
   getAllGuestBookingRequests,
@@ -23,11 +29,14 @@ import {
   acceptGuestBookingRequest,
   rejectGuestBookingRequest,
   deleteGuestBookingRequest,
+  deleteBusinessExpense,
   deleteExpiredRejectedGuestBookingRequests,
   deleteReceipt,
   expireCompletedTentativeBookings,
   getAllHouseProfiles,
   getAllBookings,
+  getAllBookingPayments,
+  getAllBusinessExpenses,
   getAllReceipts,
   getReceiptsForBooking,
   updateBooking,
@@ -42,6 +51,10 @@ import {
   setHouseName,
   saveHouseProfile,
   removeHouseAndBookings,
+  migrateLegacyBookingPayments,
+  recordBookingPayment,
+  requestGuestBookingCancellation,
+  resolveGuestBookingCancellation,
 } from './storage/bookingRepository'
 
 let configuredHouseCount = 0
@@ -165,12 +178,53 @@ function isGuestBookingRequest(value: unknown): value is GuestBookingRequest {
     (request.status === 'pending' ||
       request.status === 'accepted' ||
       request.status === 'rejected' ||
-      request.status === 'cancelled') &&
+      request.status === 'cancelled' ||
+      request.status === 'cancellation_requested' ||
+      request.status === 'cancellation_rejected') &&
     typeof request.createdAt === 'string' &&
     !Number.isNaN(Date.parse(request.createdAt)) &&
     typeof request.updatedAt === 'string' &&
     !Number.isNaN(Date.parse(request.updatedAt)) &&
     (request.bookingId === undefined || typeof request.bookingId === 'string')
+  )
+}
+
+function isBookingPayment(value: unknown): value is BookingPayment {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const payment = value as Record<string, unknown>
+  return (
+    typeof payment.id === 'string' &&
+    payment.id.length > 0 &&
+    typeof payment.bookingId === 'string' &&
+    payment.bookingId.length > 0 &&
+    typeof payment.amount === 'number' &&
+    Number.isFinite(payment.amount) &&
+    payment.amount !== 0 &&
+    typeof payment.paidAt === 'string' &&
+    Number.isFinite(Date.parse(payment.paidAt)) &&
+    (payment.legacy === undefined || typeof payment.legacy === 'boolean')
+  )
+}
+
+function isBusinessExpense(value: unknown): value is BusinessExpense {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const expense = value as Record<string, unknown>
+  return (
+    typeof expense.id === 'string' &&
+    expense.id.length > 0 &&
+    Number.isSafeInteger(expense.amount) &&
+    Number(expense.amount) > 0 &&
+    isBusinessExpenseCategory(expense.category) &&
+    typeof expense.date === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(expense.date) &&
+    dateKey(new Date(`${expense.date}T00:00:00`)) === expense.date &&
+    typeof expense.note === 'string' &&
+    typeof expense.createdAt === 'string' &&
+    Number.isFinite(Date.parse(expense.createdAt))
   )
 }
 
@@ -526,6 +580,65 @@ app.innerHTML = `
   </div>
   <div id="searchResults" class="search-results"></div>
 </main>
+  <main class="app hidden-page" id="statisticsPage">
+    <header class="statistics-header">
+      <div>
+        <p class="date">Предприниматель</p>
+        <h1>Статистика</h1>
+      </div>
+      <label class="statistics-month-label">
+        Месяц
+        <input type="month" id="statisticsMonth">
+      </label>
+    </header>
+    <section class="statistics-kpis" id="statisticsKpis"></section>
+    <section class="statistics-panel">
+      <div class="statistics-panel-heading">
+        <div>
+          <h2>Доходы и расходы</h2>
+          <p>Доли поступлений и расходов за выбранный месяц</p>
+        </div>
+      </div>
+      <div class="statistics-flow">
+        <div class="statistics-donut" id="statisticsDonut" role="img"></div>
+        <div class="statistics-legend" id="statisticsLegend"></div>
+      </div>
+    </section>
+    <section class="statistics-panel">
+      <div class="statistics-panel-heading">
+        <div>
+          <h2>Расходы</h2>
+          <p>Добавляйте расходы, чтобы видеть чистый результат за месяц.</p>
+        </div>
+      </div>
+      <form class="expense-form" id="expenseForm">
+        <label>
+          Сумма (֏)
+          <input type="number" name="amount" min="1" step="1" required>
+        </label>
+        <label>
+          Категория
+          <select name="category" required>
+            <option value="utilities">Коммунальные услуги</option>
+            <option value="cleaning">Уборка</option>
+            <option value="repairs">Ремонт</option>
+            <option value="supplies">Покупки для дома</option>
+            <option value="other">Другое</option>
+          </select>
+        </label>
+        <label>
+          Дата
+          <input type="date" name="date" required>
+        </label>
+        <label class="expense-note-field">
+          Примечание
+          <input type="text" name="note" maxlength="160" placeholder="Например, оплата электричества">
+        </label>
+        <button class="backup-button" type="submit">Добавить расход</button>
+      </form>
+      <div class="expense-list" id="expenseList"></div>
+    </section>
+  </main>
   <main class="app hidden-page" id="settingsPage">
   <div class="settings-page-header">
     <div class="search-header">
@@ -665,6 +778,11 @@ app.innerHTML = `
   <button class="nav-button" id="searchNav">
     <span>⌕</span>
     Поиск
+  </button>
+
+  <button class="nav-button" id="statisticsNav">
+    <span>◔</span>
+    Статистика
   </button>
 
   <button class="nav-button" id="settingsNav">
@@ -1132,6 +1250,9 @@ async function changeLanguage(language: string) {
   }
   await refreshPropertyProfileEditor()
   await refreshBookingViews()
+  if (!statisticsPage.classList.contains('hidden-page')) {
+    await renderStatistics()
+  }
   const activeDetailId = currentClientDetailId
   if (!clientModePage.classList.contains('hidden-page')) {
     if (currentClientView === 'trips') {
@@ -1429,11 +1550,17 @@ const searchPage =
 const settingsPage =
   document.querySelector<HTMLElement>('#settingsPage')!
 
+const statisticsPage =
+  document.querySelector<HTMLElement>('#statisticsPage')!
+
 const searchNav =
   document.querySelector<HTMLButtonElement>('#searchNav')!
 
 const settingsNav =
   document.querySelector<HTMLButtonElement>('#settingsNav')!
+
+const statisticsNav =
+  document.querySelector<HTMLButtonElement>('#statisticsNav')!
 
 const todayDate =
   document.querySelector<HTMLElement>('#todayDate')!
@@ -1456,12 +1583,14 @@ function showTodayPage() {
   todayPage.classList.remove('hidden-page')
   calendarPage.classList.add('hidden-page')
   searchPage.classList.add('hidden-page')
+  statisticsPage.classList.add('hidden-page')
   settingsPage.classList.add('hidden-page')
   bottomNav.classList.remove('hidden-page')
 
   todayNav.classList.add('active')
   calendarNav.classList.remove('active')
   searchNav.classList.remove('active')
+  statisticsNav.classList.remove('active')
   settingsNav.classList.remove('active')
 }
 
@@ -1471,12 +1600,14 @@ function showCalendarPage() {
   todayPage.classList.add('hidden-page')
   calendarPage.classList.remove('hidden-page')
   searchPage.classList.add('hidden-page')
+  statisticsPage.classList.add('hidden-page')
   settingsPage.classList.add('hidden-page')
   bottomNav.classList.remove('hidden-page')
 
   todayNav.classList.remove('active')
   calendarNav.classList.add('active')
   searchNav.classList.remove('active')
+  statisticsNav.classList.remove('active')
   settingsNav.classList.remove('active')
 
   renderCalendar()
@@ -1488,13 +1619,33 @@ function showSearchPage() {
   todayPage.classList.add('hidden-page')
   calendarPage.classList.add('hidden-page')
   searchPage.classList.remove('hidden-page')
+  statisticsPage.classList.add('hidden-page')
   settingsPage.classList.add('hidden-page')
   bottomNav.classList.remove('hidden-page')
 
   todayNav.classList.remove('active')
   calendarNav.classList.remove('active')
   searchNav.classList.add('active')
+  statisticsNav.classList.remove('active')
   settingsNav.classList.remove('active')
+}
+
+function showStatisticsPage() {
+  roleSelectionPage.classList.add('hidden-page')
+  clientModePage.classList.add('hidden-page')
+  todayPage.classList.add('hidden-page')
+  calendarPage.classList.add('hidden-page')
+  searchPage.classList.add('hidden-page')
+  statisticsPage.classList.remove('hidden-page')
+  settingsPage.classList.add('hidden-page')
+  bottomNav.classList.remove('hidden-page')
+
+  todayNav.classList.remove('active')
+  calendarNav.classList.remove('active')
+  searchNav.classList.remove('active')
+  statisticsNav.classList.add('active')
+  settingsNav.classList.remove('active')
+  void renderStatistics()
 }
 
 function showSettingsPage() {
@@ -1503,12 +1654,14 @@ function showSettingsPage() {
   todayPage.classList.add('hidden-page')
   calendarPage.classList.add('hidden-page')
   searchPage.classList.add('hidden-page')
+  statisticsPage.classList.add('hidden-page')
   settingsPage.classList.remove('hidden-page')
   bottomNav.classList.remove('hidden-page')
 
   todayNav.classList.remove('active')
   calendarNav.classList.remove('active')
   searchNav.classList.remove('active')
+  statisticsNav.classList.remove('active')
   settingsNav.classList.add('active')
 }
 
@@ -1518,6 +1671,7 @@ function showRoleSelection() {
   todayPage.classList.add('hidden-page')
   calendarPage.classList.add('hidden-page')
   searchPage.classList.add('hidden-page')
+  statisticsPage.classList.add('hidden-page')
   settingsPage.classList.add('hidden-page')
   bottomNav.classList.add('hidden-page')
 }
@@ -1528,6 +1682,7 @@ function showClientMode() {
   todayPage.classList.add('hidden-page')
   calendarPage.classList.add('hidden-page')
   searchPage.classList.add('hidden-page')
+  statisticsPage.classList.add('hidden-page')
   settingsPage.classList.add('hidden-page')
   bottomNav.classList.add('hidden-page')
   clientPropertyDetails.classList.add('hidden-page')
@@ -1896,6 +2051,10 @@ async function renderClientTrips() {
               ? 'Предприниматель отклонил заявку.'
               : request.status === 'cancelled'
                 ? 'Предприниматель удалил подтверждённую бронь.'
+                : request.status === 'cancellation_requested'
+                  ? 'Запрос на отмену отправлен предпринимателю.'
+                  : request.status === 'cancellation_rejected'
+                    ? 'Предприниматель отклонил запрос на отмену.'
                 : 'Заявка отправлена. Ожидайте ответа предпринимателя.'
           const statusClass = request.status === 'accepted'
             ? 'accepted'
@@ -1903,6 +2062,10 @@ async function renderClientTrips() {
               ? 'rejected'
               : request.status === 'cancelled'
                 ? 'cancelled'
+                : request.status === 'cancellation_requested'
+                  ? 'pending'
+                  : request.status === 'cancellation_rejected'
+                    ? 'rejected'
                 : 'pending'
           return `
             <article class="client-trip-card">
@@ -1918,6 +2081,12 @@ async function renderClientTrips() {
                 <span>${formatGuestCapacity(request.guestCount, selectedLanguage)}</span>
                 <strong>${request.totalPrice.toLocaleString(getLanguageLocale(selectedLanguage))} ֏</strong>
               </div>
+              ${
+                request.status === 'accepted' ||
+                request.status === 'cancellation_rejected'
+                  ? `<button type="button" class="client-cancel-request" data-request-cancellation="${escapeHtml(request.id)}">${translateText('Запросить отмену', selectedLanguage)}</button>`
+                  : ''
+              }
             </article>
           `
         }).join('')}
@@ -2282,9 +2451,29 @@ async function renderClientPropertyDetails(listingId: string) {
   translateDom(clientPropertyDetails)
 }
 
-clientSearchResults.addEventListener('click', (event) => {
+clientSearchResults.addEventListener('click', async (event) => {
   const target = event.target
   if (!(target instanceof Element)) {
+    return
+  }
+  const cancellationButton =
+    target.closest<HTMLButtonElement>('[data-request-cancellation]')
+  const cancellationRequestId =
+    cancellationButton?.dataset.requestCancellation
+  if (cancellationRequestId) {
+    if (!confirm('Отправить предпринимателю запрос на отмену брони?')) {
+      return
+    }
+    const requested = await requestGuestBookingCancellation(
+      cancellationRequestId,
+      new Date().toISOString(),
+    )
+    if (requested) {
+      await renderClientTrips()
+      showToast('Запрос на отмену отправлен предпринимателю.', 'success')
+    } else {
+      showToast('Не удалось отправить запрос на отмену.')
+    }
     return
   }
   const favoriteButton =
@@ -2463,6 +2652,7 @@ clientSearchForm.addEventListener('submit', async (event) => {
 todayNav.addEventListener('click', showTodayPage)
 calendarNav.addEventListener('click', showCalendarPage)
 searchNav.addEventListener('click', showSearchPage)
+statisticsNav.addEventListener('click', showStatisticsPage)
 settingsNav.addEventListener('click', showSettingsPage)
 
 const modal = document.querySelector<HTMLDivElement>('#bookingModal')!
@@ -3758,15 +3948,25 @@ async function renderGuestRequestInbox() {
       new Date(left.checkIn).getTime() -
       new Date(right.checkIn).getTime(),
     )
+  const cancellationRequests = requests
+    .filter((request) => request.status === 'cancellation_requested')
+    .sort((left, right) =>
+      new Date(left.updatedAt).getTime() -
+      new Date(right.updatedAt).getTime(),
+    )
 
-  if (pendingRequests.length === 0 && rejectedRequests.length === 0) {
+  if (
+    pendingRequests.length === 0 &&
+    rejectedRequests.length === 0 &&
+    cancellationRequests.length === 0
+  ) {
     inbox.innerHTML = ''
     return
   }
 
   const renderRequestCard = (
     request: GuestBookingRequest,
-    status: 'pending' | 'rejected',
+    status: 'pending' | 'rejected' | 'cancellation_requested',
   ) => `
     <article class="guest-request-card${status === 'rejected' ? ' guest-request-card--rejected' : ''}" data-guest-request="${escapeHtml(request.id)}">
       <div class="guest-request-card-heading">
@@ -3774,7 +3974,7 @@ async function renderGuestRequestInbox() {
           <span class="guest-request-property">${escapeHtml(request.propertyName)} · ${escapeHtml(getHouseName(request.houseId))}</span>
           <h3>${escapeHtml(request.guestName)}</h3>
         </div>
-        <span class="guest-request-status">${translateText(status === 'pending' ? 'Ожидает решения' : 'Отклонена', selectedLanguage)}</span>
+        <span class="guest-request-status">${translateText(status === 'pending' ? 'Ожидает решения' : status === 'rejected' ? 'Отклонена' : 'Запрошена отмена', selectedLanguage)}</span>
       </div>
       <div class="guest-request-meta">
         <span>${new Date(`${request.checkIn}T00:00:00`).toLocaleDateString(getLanguageLocale(selectedLanguage))} – ${new Date(`${request.checkOut}T00:00:00`).toLocaleDateString(getLanguageLocale(selectedLanguage))}</span>
@@ -3787,7 +3987,10 @@ async function renderGuestRequestInbox() {
           status === 'pending'
             ? `<button type="button" class="guest-request-accept" data-accept-request="${escapeHtml(request.id)}">${translateText('Принять и добавить бронь', selectedLanguage)}</button>
                <button type="button" class="guest-request-reject" data-reject-request="${escapeHtml(request.id)}">${translateText('Отклонить', selectedLanguage)}</button>`
-            : `<button type="button" class="guest-request-delete" data-delete-rejected-request="${escapeHtml(request.id)}">${translateText('Удалить заявку', selectedLanguage)}</button>`
+            : status === 'cancellation_requested'
+              ? `<button type="button" class="guest-request-accept" data-resolve-cancellation="approve" data-cancellation-request="${escapeHtml(request.id)}">${translateText('Подтвердить отмену', selectedLanguage)}</button>
+                 <button type="button" class="guest-request-reject" data-resolve-cancellation="reject" data-cancellation-request="${escapeHtml(request.id)}">${translateText('Отклонить отмену', selectedLanguage)}</button>`
+              : `<button type="button" class="guest-request-delete" data-delete-rejected-request="${escapeHtml(request.id)}">${translateText('Удалить заявку', selectedLanguage)}</button>`
         }
       </div>
     </article>
@@ -3826,6 +4029,22 @@ async function renderGuestRequestInbox() {
           </section>`
         : ''
     }
+    ${
+      cancellationRequests.length > 0
+        ? `<section class="guest-request-group guest-request-group--rejected">
+            <div class="guest-request-inbox-header">
+              <div>
+                <h2>${translateText('Запросы на отмену брони', selectedLanguage)}</h2>
+                <p>${translateText('Бронь останется активной, пока вы не подтвердите отмену.', selectedLanguage)}</p>
+              </div>
+              <span class="guest-request-count">${cancellationRequests.length}</span>
+            </div>
+            <div class="guest-request-list">
+              ${cancellationRequests.map((request) => renderRequestCard(request, 'cancellation_requested')).join('')}
+            </div>
+          </section>`
+        : ''
+    }
   `
   translateDom(inbox)
 }
@@ -3835,6 +4054,32 @@ document
   .addEventListener('click', async (event) => {
     const target = event.target
     if (!(target instanceof Element)) {
+      return
+    }
+
+    const resolveCancellationButton =
+      target.closest<HTMLButtonElement>('[data-cancellation-request]')
+    const cancellationRequestId =
+      resolveCancellationButton?.dataset.cancellationRequest
+    const approveCancellation =
+      resolveCancellationButton?.dataset.resolveCancellation === 'approve'
+    if (cancellationRequestId) {
+      const resolved = await resolveGuestBookingCancellation(
+        cancellationRequestId,
+        approveCancellation,
+        new Date().toISOString(),
+      )
+      if (!resolved) {
+        showToast('Не удалось обработать запрос на отмену.')
+        return
+      }
+      await refreshBookingViews()
+      showToast(
+        approveCancellation
+          ? 'Отмена брони подтверждена.'
+          : 'Запрос на отмену отклонён.',
+        'success',
+      )
       return
     }
 
@@ -3864,6 +4109,7 @@ document
         )
         return
       }
+
       if (result.status !== 'accepted') {
         showToast('Эта заявка уже обработана или удалена.')
         await renderGuestRequestInbox()
@@ -3996,9 +4242,11 @@ exportBackupButton.addEventListener('click', async () => {
     const receipts = await getAllReceipts()
     const houseProfiles = await getAllHouseProfiles()
     const guestRequests = await getAllGuestBookingRequests()
+    const payments = await getAllBookingPayments()
+    const expenses = await getAllBusinessExpenses()
 
     const backup = {
-      version: 4,
+      version: 5,
       createdAt: new Date().toISOString(),
       houseCount: configuredHouseCount,
       houseNames: configuredHouseNames,
@@ -4006,6 +4254,8 @@ exportBackupButton.addEventListener('click', async () => {
       bookings,
       houseProfiles,
       guestRequests,
+      payments,
+      expenses,
       receipts: await Promise.all(
         receipts.map(async (receipt) => ({
           id: receipt.id,
@@ -4072,7 +4322,7 @@ backupFileInput.addEventListener('change', async () => {
     const backup = parsed as Record<string, unknown>
 
     if (
-      ![1, 2, 3, 4].includes(Number(backup.version)) ||
+      ![1, 2, 3, 4, 5].includes(Number(backup.version)) ||
       !Array.isArray(backup.bookings)
     ) {
       throw new Error('Это некорректный файл резервной копии.')
@@ -4134,6 +4384,34 @@ backupFileInput.addEventListener('change', async () => {
       importedGuestRequests = backup.guestRequests
     }
 
+    let importedPayments: BookingPayment[] = []
+    if (backup.payments !== undefined) {
+      if (!Array.isArray(backup.payments)) {
+        throw new Error('Некорректный список оплат в резервной копии.')
+      }
+      if (!backup.payments.every(isBookingPayment)) {
+        throw new Error('Некорректная оплата в резервной копии.')
+      }
+      importedPayments = backup.payments
+    }
+    if (new Set(importedPayments.map((payment) => payment.id)).size !== importedPayments.length) {
+      throw new Error('В резервной копии найдены повторяющиеся оплаты.')
+    }
+
+    let importedExpenses: BusinessExpense[] = []
+    if (backup.expenses !== undefined) {
+      if (!Array.isArray(backup.expenses)) {
+        throw new Error('Некорректный список расходов в резервной копии.')
+      }
+      if (!backup.expenses.every(isBusinessExpense)) {
+        throw new Error('Некорректный расход в резервной копии.')
+      }
+      importedExpenses = backup.expenses
+    }
+    if (new Set(importedExpenses.map((expense) => expense.id)).size !== importedExpenses.length) {
+      throw new Error('В резервной копии найдены повторяющиеся расходы.')
+    }
+
     const maxReferencedHouseId = Math.max(
       1,
       ...bookings.map((booking) => booking.houseId),
@@ -4148,7 +4426,7 @@ backupFileInput.addEventListener('change', async () => {
     ) as Record<number, string>
     let restoredLanguage = selectedLanguage
 
-    if (backup.version === 4) {
+    if (Number(backup.version) >= 4) {
       if (
         !Number.isSafeInteger(backup.houseCount) ||
         Number(backup.houseCount) < maxReferencedHouseId ||
@@ -4183,6 +4461,8 @@ backupFileInput.addEventListener('change', async () => {
     const confirmed = confirm(
       `Найдено бронирований: ${bookings.length}.\n` +
       `Квитанций: ${importedReceipts.length}.\n\n` +
+      `Оплат: ${importedPayments.length}.\n` +
+      `Расходов: ${importedExpenses.length}.\n\n` +
       'Текущие данные будут заменены данными из резервной копии.\n\n' +
       'Продолжить?',
     )
@@ -4201,6 +4481,8 @@ backupFileInput.addEventListener('change', async () => {
         houseNames: restoredHouseNames,
         language: restoredLanguage,
       },
+      importedPayments,
+      importedExpenses,
     )
 
     configuredHouseCount = restoredHouseCount
@@ -4264,6 +4546,216 @@ function bookingOccupiesCalendarDay(
 
   return start < nextDay && occupiedUntil > dayStart
 }
+
+function getLocalMonthKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+const statisticsMonthInput =
+  document.querySelector<HTMLInputElement>('#statisticsMonth')!
+const expenseForm =
+  document.querySelector<HTMLFormElement>('#expenseForm')!
+const expenseDateInput =
+  document.querySelector<HTMLInputElement>('#expenseForm input[name="date"]')!
+
+const expenseCategoryLabels: Record<BusinessExpenseCategory, string> = {
+  utilities: 'Коммунальные услуги',
+  cleaning: 'Уборка',
+  repairs: 'Ремонт',
+  supplies: 'Покупки для дома',
+  other: 'Другое',
+}
+
+function isBusinessExpenseCategory(value: unknown): value is BusinessExpenseCategory {
+  return (
+    value === 'utilities' ||
+    value === 'cleaning' ||
+    value === 'repairs' ||
+    value === 'supplies' ||
+    value === 'other'
+  )
+}
+
+async function renderStatistics() {
+  if (!statisticsMonthInput.value) {
+    statisticsMonthInput.value = getLocalMonthKey(new Date())
+  }
+  const monthKey = statisticsMonthInput.value
+  const [payments, expenses, bookings] = await Promise.all([
+    getAllBookingPayments(),
+    getAllBusinessExpenses(),
+    getAllBookings(),
+  ])
+  const monthPayments = payments.filter(
+    (payment) => payment.paidAt.slice(0, 7) === monthKey,
+  )
+  const monthExpenses = expenses
+    .filter((expense) => expense.date.slice(0, 7) === monthKey)
+    .sort((left, right) => right.date.localeCompare(left.date))
+  const income = monthPayments.reduce((total, payment) => total + payment.amount, 0)
+  const spending = monthExpenses.reduce((total, expense) => total + expense.amount, 0)
+  const net = income - spending
+  const [year, month] = monthKey.split('-').map(Number)
+  const daysInMonth = new Date(year, month, 0).getDate()
+  let occupiedHouseDays = 0
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const dayStart = new Date(year, month - 1, day)
+    const nextDay = new Date(year, month - 1, day + 1)
+    for (const houseId of getHouseIds()) {
+      if (
+        bookings.some(
+          (booking) =>
+            booking.houseId === houseId &&
+            (booking.status ?? 'confirmed') === 'confirmed' &&
+            bookingOccupiesCalendarDay(booking, dayStart, nextDay),
+        )
+      ) {
+        occupiedHouseDays += 1
+      }
+    }
+  }
+
+  const capacityDays = configuredHouseCount * daysInMonth
+  const occupancyPercent = capacityDays > 0
+    ? Math.round((occupiedHouseDays / capacityDays) * 100)
+    : 0
+  const flowTotal = Math.max(0, income) + spending
+  const incomeShare = flowTotal > 0 ? (Math.max(0, income) / flowTotal) * 100 : 0
+  const expenseShare = flowTotal > 0 ? (spending / flowTotal) * 100 : 0
+  const kpis = document.querySelector<HTMLElement>('#statisticsKpis')!
+  const donut = document.querySelector<HTMLElement>('#statisticsDonut')!
+  const legend = document.querySelector<HTMLElement>('#statisticsLegend')!
+  const expenseList = document.querySelector<HTMLElement>('#expenseList')!
+
+  kpis.innerHTML = `
+    <article class="statistics-kpi statistics-kpi--income">
+      <span>${translateText('Получено за месяц', selectedLanguage)}</span>
+      <strong>${income.toLocaleString(getLanguageLocale(selectedLanguage))} ֏</strong>
+      <small>${translateText('Фактически записанные оплаты', selectedLanguage)}</small>
+    </article>
+    <article class="statistics-kpi statistics-kpi--expense">
+      <span>${translateText('Расходы за месяц', selectedLanguage)}</span>
+      <strong>${spending.toLocaleString(getLanguageLocale(selectedLanguage))} ֏</strong>
+      <small>${translateText('Записанные расходы', selectedLanguage)}</small>
+    </article>
+    <article class="statistics-kpi ${net >= 0 ? 'statistics-kpi--net' : 'statistics-kpi--negative'}">
+      <span>${translateText('Разница доходов и расходов', selectedLanguage)}</span>
+      <strong>${net.toLocaleString(getLanguageLocale(selectedLanguage))} ֏</strong>
+      <small>${translateText('Доходы минус расходы', selectedLanguage)}</small>
+    </article>
+    <article class="statistics-kpi statistics-kpi--occupancy">
+      <span>${translateText('Загрузка домов', selectedLanguage)}</span>
+      <strong>${occupancyPercent}%</strong>
+      <small>${occupiedHouseDays} / ${capacityDays} ${translateText('домо-дней занято', selectedLanguage)}</small>
+    </article>
+  `
+
+  donut.style.setProperty(
+    '--statistics-income-share',
+    `${incomeShare}%`,
+  )
+  donut.setAttribute(
+    'aria-label',
+    `${translateText('Доходы', selectedLanguage)} ${incomeShare.toFixed(0)}%, ${translateText('расходы', selectedLanguage)} ${expenseShare.toFixed(0)}%`,
+  )
+  donut.innerHTML = `
+    <div class="statistics-donut-center">
+      <strong>${flowTotal.toLocaleString(getLanguageLocale(selectedLanguage))} ֏</strong>
+      <span>${translateText('Оборот месяца', selectedLanguage)}</span>
+    </div>
+  `
+  legend.innerHTML = `
+    <div class="statistics-legend-row">
+      <span class="statistics-legend-dot statistics-legend-dot--income"></span>
+      <span>${translateText('Доходы', selectedLanguage)}</span>
+      <strong>${income.toLocaleString(getLanguageLocale(selectedLanguage))} ֏ · ${incomeShare.toFixed(0)}%</strong>
+    </div>
+    <div class="statistics-legend-row">
+      <span class="statistics-legend-dot statistics-legend-dot--expense"></span>
+      <span>${translateText('Расходы', selectedLanguage)}</span>
+      <strong>${spending.toLocaleString(getLanguageLocale(selectedLanguage))} ֏ · ${expenseShare.toFixed(0)}%</strong>
+    </div>
+  `
+  expenseList.innerHTML = monthExpenses.length === 0
+    ? `<p class="expense-list-empty">${translateText('В этом месяце расходы ещё не добавлены.', selectedLanguage)}</p>`
+    : monthExpenses.map((expense) => `
+        <article class="expense-list-row">
+          <div>
+            <strong>${translateText(expenseCategoryLabels[expense.category], selectedLanguage)}</strong>
+            <span>${new Date(`${expense.date}T00:00:00`).toLocaleDateString(getLanguageLocale(selectedLanguage))}${expense.note ? ` · ${escapeHtml(expense.note)}` : ''}</span>
+          </div>
+          <strong class="expense-list-amount">−${expense.amount.toLocaleString(getLanguageLocale(selectedLanguage))} ֏</strong>
+          <button type="button" class="expense-delete-button" data-delete-expense="${escapeHtml(expense.id)}" aria-label="${translateText('Удалить расход', selectedLanguage)}">×</button>
+        </article>
+      `).join('')
+
+  translateDom(statisticsPage)
+}
+
+statisticsMonthInput.value = getLocalMonthKey(new Date())
+expenseDateInput.value = `${statisticsMonthInput.value}-01`
+statisticsMonthInput.addEventListener('change', () => {
+  expenseDateInput.value = `${statisticsMonthInput.value}-01`
+  void renderStatistics()
+})
+
+expenseForm.addEventListener('submit', async (event) => {
+  event.preventDefault()
+  if (!expenseForm.reportValidity()) {
+    return
+  }
+  const formData = new FormData(expenseForm)
+  const amount = Number(formData.get('amount'))
+  const category = String(formData.get('category'))
+  const date = String(formData.get('date'))
+  const note = String(formData.get('note') ?? '').trim()
+  if (
+    !Number.isSafeInteger(amount) ||
+    amount <= 0 ||
+    !isBusinessExpenseCategory(category) ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+    Number.isNaN(Date.parse(`${date}T00:00:00`)) ||
+    dateKey(new Date(`${date}T00:00:00`)) !== date
+  ) {
+    showToast('Проверьте сумму, дату и категорию расхода.')
+    return
+  }
+  await addBusinessExpense({
+    id: crypto.randomUUID(),
+    amount,
+    category,
+    date,
+    note,
+    createdAt: new Date().toISOString(),
+  })
+  expenseForm.reset()
+  expenseDateInput.value = `${statisticsMonthInput.value}-01`
+  await renderStatistics()
+  showToast('Расход добавлен.', 'success')
+})
+
+expenseDateInput.addEventListener('change', () => {
+  if (expenseDateInput.value) {
+    statisticsMonthInput.value = expenseDateInput.value.slice(0, 7)
+  }
+})
+
+document.querySelector<HTMLElement>('#expenseList')!
+  .addEventListener('click', async (event) => {
+    const target = event.target
+    if (!(target instanceof Element)) {
+      return
+    }
+    const button = target.closest<HTMLButtonElement>('[data-delete-expense]')
+    const expenseId = button?.dataset.deleteExpense
+    if (!expenseId || !confirm('Удалить этот расход?')) {
+      return
+    }
+    await deleteBusinessExpense(expenseId)
+    await renderStatistics()
+    showToast('Расход удалён.', 'success')
+  })
 
 async function renderCalendar() {
   const calendar =
@@ -4976,6 +5468,7 @@ async function initializeHouseConfiguration() {
   translateDom()
   updateClientDestinationOptions()
   renderTodayDate()
+  await migrateLegacyBookingPayments()
 
   const savedHouseCount = await getHouseCount()
   configuredHouseNames = await getHouseNames()
@@ -5259,17 +5752,23 @@ bookingDetails.addEventListener('click', async (event) => {
     return
   }
 
-  booking.paidAmount += amount
-  if (
-    (booking.status ?? 'confirmed') === 'pending' &&
-    booking.paidAmount > 0
-  ) {
-  booking.status = 'confirmed'
-}
-
-  booking.updatedAt = new Date().toISOString()
-
-  await updateBooking(booking)
+  const paymentResult = await recordBookingPayment(
+    booking.id,
+    amount,
+    new Date().toISOString(),
+  )
+  if (paymentResult.status === 'conflict') {
+    showToast('Нельзя подтвердить предварительную бронь: даты пересекаются с другой бронью.')
+    return
+  }
+  if (paymentResult.status !== 'recorded') {
+    showToast(
+      paymentResult.status === 'overpayment'
+        ? 'Сумма оплаты не может быть больше остатка.'
+        : 'Не удалось записать оплату.',
+    )
+    return
+  }
 
   await refreshBookingViews()
   await openBookingDetails(booking.id)
